@@ -349,9 +349,9 @@ struct ContentView: View {
             PanelDivider().padding(.horizontal, 14)
             if viewModel.selectedSection == .displays {
                 HStack(spacing: 8) {
-                    routeButton("全部模式", icon: .modeList, section: .allModes, focus: .allModes)
+                    routeButton("全部模式", icon: "list.bullet", section: .allModes, focus: .allModes)
                         .disabled(selectedDisplay?.modes.isEmpty != false)
-                    routeButton("系统工具", icon: .toolkit, section: .controls, focus: .tools)
+                    routeButton("系统工具", icon: "gearshape", section: .controls, focus: .tools)
                 }
                 .padding(.horizontal, 14)
                 .padding(.top, 6)
@@ -362,13 +362,13 @@ struct ContentView: View {
         }
     }
 
-    private func routeButton(_ title: String, icon: SettingsGlyph.Kind, section: AppSection, focus: NavigationFocus) -> some View {
+    private func routeButton(_ title: String, icon: String, section: AppSection, focus: NavigationFocus) -> some View {
         Button {
             returnFocus = focus
             viewModel.selectedSection = section
         } label: {
             HStack(spacing: 6) {
-                SettingsGlyph(kind: icon, compact: true)
+                PanelGlyph(icon, role: .utility).foregroundStyle(.secondary)
                 Text(title).font(PanelType.action)
                 Spacer(minLength: 0)
                 PanelGlyph("chevron.right", role: .utility).foregroundStyle(.secondary)
@@ -437,89 +437,6 @@ private struct PanelGlyph: View {
             .frame(width: role.slot, height: 20)
             .accessibilityLabel(label ?? "")
             .accessibilityHidden(label == nil)
-    }
-}
-
-private struct SettingsGlyph: View {
-    enum Kind {
-        case modeList, toolkit, awake, appearance, desktop, files, dock, saver, displayOff
-
-        var symbol: String? {
-            switch self {
-            case .modeList: "list.bullet"
-            case .toolkit: "gearshape.fill"
-            case .awake: "cup.and.saucer.fill"
-            case .appearance: "moon.fill"
-            case .desktop: "desktopcomputer"
-            case .files: "eye.fill"
-            case .dock: "dock.rectangle"
-            case .saver: "play.rectangle"
-            case .displayOff: nil
-            }
-        }
-
-        var palette: (top: UInt32, bottom: UInt32) {
-            switch self {
-            case .modeList: (0x49677D, 0x324D67)
-            case .toolkit: (0x60656D, 0x424750)
-            case .awake: (0x995516, 0x794009)
-            case .appearance: (0x6555AC, 0x483984)
-            case .desktop: (0x325EA6, 0x224B8A)
-            case .files: (0x19736F, 0x0A5857)
-            case .dock: (0x39678F, 0x2A4D76)
-            case .saver: (0x805591, 0x613D72)
-            case .displayOff: (0x58616E, 0x39414F)
-            }
-        }
-
-        var symbolSize: CGFloat {
-            switch self {
-            case .desktop, .files, .dock, .saver: 10.5
-            case .awake, .modeList: 11
-            default: 11.5
-            }
-        }
-    }
-
-    let kind: Kind
-    var compact = false
-    @Environment(\.colorSchemeContrast) private var contrast
-
-    private func color(_ rgb: UInt32) -> Color {
-        Color(
-            .sRGB,
-            red: Double((rgb >> 16) & 255) / 255,
-            green: Double((rgb >> 8) & 255) / 255,
-            blue: Double(rgb & 255) / 255,
-            opacity: 1
-        )
-    }
-
-    var body: some View {
-        let size: CGFloat = compact ? 18 : 22
-        let tile = RoundedRectangle(cornerRadius: compact ? 4.5 : 5.5, style: .continuous)
-        let palette = kind.palette
-        ZStack {
-            tile.fill(LinearGradient(
-                colors: [color(contrast == .increased ? palette.bottom : palette.top), color(palette.bottom)],
-                startPoint: .top, endPoint: .bottom
-            ))
-            tile.strokeBorder(.white.opacity(0.16), lineWidth: 0.5)
-            if let symbol = kind.symbol {
-                Image(systemName: symbol)
-                    .font(.system(size: kind.symbolSize, weight: .semibold))
-                    .symbolRenderingMode(.monochrome)
-                    .offset(y: kind == .appearance ? -0.5 : 0)
-            } else {
-                DisplayOffGlyph()
-                    .frame(width: 17, height: 16)
-                    .scaleEffect(0.72)
-            }
-        }
-        .foregroundStyle(.white)
-        .frame(width: size, height: size)
-        .frame(width: compact ? 18 : 24)
-        .accessibilityHidden(true)
     }
 }
 
@@ -607,6 +524,7 @@ private struct ModeRow: View {
 
 private struct ControlsPane: View {
     @ObservedObject var viewModel: AppViewModel
+    private let textInset: CGFloat = 12
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -614,7 +532,6 @@ private struct ControlsPane: View {
 
             VStack(spacing: 0) {
                 ToggleControlRow(
-                    icon: .awake,
                     title: "防休眠",
                     subtitle: viewModel.controls.keepAwake ? "退出 App 时自动关闭" : "阻止系统休眠和自动屏保",
                     isOn: binding(viewModel.controls.keepAwake, action: viewModel.setKeepAwake),
@@ -624,7 +541,6 @@ private struct ControlsPane: View {
                 )
                 rowDivider
                 ToggleControlRow(
-                    icon: .appearance,
                     title: "深色模式",
                     subtitle: viewModel.controls.darkMode ? "当前使用深色外观" : "当前使用浅色外观",
                     isOn: binding(viewModel.controls.darkMode, action: viewModel.setDarkMode),
@@ -634,7 +550,6 @@ private struct ControlsPane: View {
                 )
                 rowDivider
                 ToggleControlRow(
-                    icon: .desktop,
                     title: "隐藏桌面图标",
                     subtitle: viewModel.controls.desktopIconsHidden ? "桌面图标已隐藏" : "桌面图标正常显示",
                     isOn: binding(viewModel.controls.desktopIconsHidden, action: viewModel.setDesktopIconsHidden),
@@ -644,7 +559,6 @@ private struct ControlsPane: View {
                 )
                 rowDivider
                 ToggleControlRow(
-                    icon: .files,
                     title: "显示隐藏文件",
                     subtitle: viewModel.controls.hiddenFilesVisible ? "Finder 正在显示隐藏项目" : "Finder 当前不显示隐藏文件",
                     isOn: binding(viewModel.controls.hiddenFilesVisible, action: viewModel.setHiddenFilesVisible),
@@ -654,7 +568,6 @@ private struct ControlsPane: View {
                 )
                 rowDivider
                 ToggleControlRow(
-                    icon: .dock,
                     title: "Dock 自动隐藏",
                     subtitle: viewModel.controls.dockAutoHide ? "移到屏幕边缘时显示 Dock" : "Dock 保持显示",
                     isOn: binding(viewModel.controls.dockAutoHide, action: viewModel.setDockAutoHide),
@@ -699,12 +612,12 @@ private struct ControlsPane: View {
             .font(PanelType.label)
             .foregroundStyle(PanelType.detailInk)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.leading, PanelGrid.rowInset)
+            .padding(.leading, textInset)
             .accessibilityAddTraits(.isHeader)
     }
 
     private var rowDivider: some View {
-        PanelDivider().padding(.leading, 46)
+        PanelDivider().padding(.horizontal, textInset)
     }
 
     private func binding(
@@ -743,7 +656,6 @@ private struct ControlRowStatus: View {
 }
 
 private struct ToggleControlRow: View {
-    let icon: SettingsGlyph.Kind
     let title: String
     let subtitle: String
     @Binding var isOn: Bool
@@ -753,8 +665,6 @@ private struct ToggleControlRow: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            SettingsGlyph(kind: icon)
-
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
                     .font(PanelType.action)
@@ -763,6 +673,7 @@ private struct ToggleControlRow: View {
                     .foregroundStyle(PanelType.detailInk)
                     .lineLimit(1)
             }
+            .accessibilityHidden(true)
 
             Spacer(minLength: 8)
 
@@ -774,7 +685,7 @@ private struct ToggleControlRow: View {
                 .controlSize(.small)
                 .disabled(isInteractionDisabled)
                 .accessibilityLabel(title)
-                .accessibilityHint(isBusy ? "正在应用设置" : "")
+                .accessibilityHint(isBusy ? "正在应用设置" : subtitle)
         }
         .padding(.horizontal, 12)
         .frame(minHeight: 42)
@@ -782,7 +693,9 @@ private struct ToggleControlRow: View {
 }
 
 private struct ActionRow: View {
-    let icon: SettingsGlyph.Kind
+    enum Icon { case saver, displayOff }
+
+    let icon: Icon
     let title: String
     let isBusy: Bool
     let hasSucceeded: Bool
@@ -798,12 +711,24 @@ private struct ActionRow: View {
     var body: some View {
         Button(action: action) {
             HStack(spacing: 10) {
-                SettingsGlyph(kind: icon)
                 Text(title)
                     .font(PanelType.action)
                 Spacer()
 
-                ControlRowStatus(isBusy: isBusy, hasSucceeded: hasSucceeded)
+                Group {
+                    if isBusy || hasSucceeded {
+                        ControlRowStatus(isBusy: isBusy, hasSucceeded: hasSucceeded)
+                    } else if icon == .saver {
+                        Image(systemName: "play.rectangle")
+                            .font(.system(size: 13, weight: .medium))
+                    } else {
+                        DisplayOffGlyph()
+                            .frame(width: 17, height: 16)
+                    }
+                }
+                .foregroundStyle(.secondary)
+                .frame(width: 20, height: 20)
+                .accessibilityHidden(true)
             }
             .padding(.horizontal, 12)
             .frame(minHeight: 34)
