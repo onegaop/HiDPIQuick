@@ -1,6 +1,7 @@
 import Cocoa
 import CoreGraphics
 import Foundation
+import ServiceManagement
 
 @MainActor
 final class AppViewModel: ObservableObject {
@@ -127,6 +128,18 @@ final class AppViewModel: ObservableObject {
         )
     }
 
+    func setLaunchAtLogin(_ enabled: Bool) {
+        guard controls.loginLaunch != .unavailable else { return }
+        performToggle(
+            .launchAtLogin,
+            optimisticValue: enabled,
+            success: enabled ? "已开启登录时启动" : "已关闭登录时启动",
+            verificationDelay: 0.25,
+            expectedState: { enabled ? $0.loginLaunch.isRequested : $0.loginLaunch == .off },
+            operation: { try $0.setLaunchAtLogin(enabled) }
+        )
+    }
+
     func startScreenSaver() {
         performAction(.screenSaver, success: "已请求启动屏幕保护程序") {
             try $0.startScreenSaver()
@@ -157,6 +170,9 @@ final class AppViewModel: ObservableObject {
                 guard let url = URL(string: value) else { continue }
                 if NSWorkspace.shared.open(url) { return }
             }
+        case .openLoginItems:
+            dismissControlFeedback()
+            SMAppService.openSystemSettingsLoginItems()
         case .openDisplaysSettings:
             openDisplaysSettings()
         }
@@ -262,7 +278,14 @@ final class AppViewModel: ObservableObject {
             switch result {
             case .success(let snapshot):
                 self.controls = snapshot
-                self.showControlFeedback(identifier, message: message, tone: .success)
+                if identifier == .launchAtLogin && snapshot.loginLaunch == .pendingApproval {
+                    self.showControlFeedback(
+                        identifier, message: "请在「登录项」中允许 HiDPI Quick。批准前不会自动启动。",
+                        tone: .warning, action: .openLoginItems
+                    )
+                } else {
+                    self.showControlFeedback(identifier, message: message, tone: .success)
+                }
             case .failure(let error):
                 self.controls = previousControls
                 self.showControlFailure(identifier, error: error)

@@ -86,11 +86,14 @@ struct ContentView: View {
     }
 
     private var trailingContentInset: CGFloat {
-        // Legacy scrollers already reserve layout width. Only overlay rails
-        // share the content viewport and need supplemental clearance.
-        let usesOverlayModes = viewModel.selectedSection == .allModes &&
-            NSScroller.preferredScrollerStyle == .overlay
-        return PanelGrid.edge + (usesOverlayModes ? PanelGrid.modeScrollerClearance : 0)
+        // Legacy scrollers reserve their own space. Overlay rails share the viewport.
+        let usesOverlayScroller = showsScrollIndicators && NSScroller.preferredScrollerStyle == .overlay
+        return PanelGrid.edge + (usesOverlayScroller ? PanelGrid.modeScrollerClearance : 0)
+    }
+
+    private var showsScrollIndicators: Bool {
+        viewModel.selectedSection == .allModes ||
+            (viewModel.selectedSection == .controls && measuredHeight > viewport.maximumHeight)
     }
 
     var body: some View {
@@ -99,13 +102,13 @@ struct ContentView: View {
                 .fixedSize(horizontal: false, vertical: true)
                 .measurePanelHeight(.header)
 
-            ScrollView(.vertical, showsIndicators: viewModel.selectedSection == .allModes) {
+            ScrollView(.vertical, showsIndicators: showsScrollIndicators) {
                 pageBody
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.leading, PanelGrid.edge)
                     .padding(.trailing, trailingContentInset)
                     .padding(.top, 6)
-                    .padding(.bottom, 14)
+                    .padding(.bottom, viewModel.selectedSection == .controls ? 9 : 14)
                     .measurePanelHeight(.body)
             }
             .id(ScrollIdentity(section: viewModel.selectedSection, displayID: selectedDisplay?.id))
@@ -575,6 +578,17 @@ private struct ControlsPane: View {
                     hasSucceeded: succeeded(.dockAutoHide),
                     isInteractionDisabled: viewModel.activeControl != nil
                 )
+                rowDivider
+                ToggleControlRow(
+                    title: "登录时启动",
+                    subtitle: viewModel.controls.loginLaunch.subtitle,
+                    isOn: binding(viewModel.controls.loginLaunch.isRequested, action: viewModel.setLaunchAtLogin),
+                    isBusy: viewModel.activeControl == .launchAtLogin,
+                    hasSucceeded: succeeded(.launchAtLogin),
+                    isInteractionDisabled: viewModel.activeControl != nil || viewModel.controls.loginLaunch == .unavailable,
+                    subtitleAction: viewModel.controls.loginLaunch == .pendingApproval
+                        ? { viewModel.performFeedbackAction(.openLoginItems) } : nil
+                )
             }
             .controlGroupStyle()
 
@@ -662,18 +676,28 @@ private struct ToggleControlRow: View {
     let isBusy: Bool
     let hasSucceeded: Bool
     let isInteractionDisabled: Bool
+    var subtitleAction: (() -> Void)? = nil
 
     var body: some View {
         HStack(spacing: 10) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
                     .font(PanelType.action)
-                Text(isBusy ? "正在应用…" : (hasSucceeded ? (isOn ? "已开启" : "已关闭") : subtitle))
-                    .font(PanelType.detail)
-                    .foregroundStyle(PanelType.detailInk)
-                    .lineLimit(1)
+                    .accessibilityHidden(true)
+                if let subtitleAction, !isBusy {
+                    Button(subtitle, action: subtitleAction)
+                        .buttonStyle(.link)
+                        .font(PanelType.detail)
+                        .lineLimit(1)
+                        .accessibilityLabel("批准 HiDPI Quick 登录时启动")
+                } else {
+                    Text(isBusy ? "正在应用…" : (hasSucceeded ? (isOn ? "已开启" : "已关闭") : subtitle))
+                        .font(PanelType.detail)
+                        .foregroundStyle(PanelType.detailInk)
+                        .lineLimit(1)
+                        .accessibilityHidden(true)
+                }
             }
-            .accessibilityHidden(true)
 
             Spacer(minLength: 8)
 
@@ -688,7 +712,7 @@ private struct ToggleControlRow: View {
                 .accessibilityHint(isBusy ? "正在应用设置" : subtitle)
         }
         .padding(.horizontal, 12)
-        .frame(minHeight: 42)
+        .frame(minHeight: 39)
     }
 }
 
@@ -731,7 +755,7 @@ private struct ActionRow: View {
                 .accessibilityHidden(true)
             }
             .padding(.horizontal, 12)
-            .frame(minHeight: 34)
+            .frame(minHeight: 31)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -797,7 +821,8 @@ private struct FeedbackView: View {
 
             VStack(alignment: .leading, spacing: 5) {
                 if !isSuccess {
-                    Text("操作未完成").font(PanelType.selected)
+                    Text(feedback.action == .openLoginItems ? "等待系统批准" : "操作未完成")
+                        .font(PanelType.selected)
                 }
                 Text(feedback.message)
                     .font(PanelType.detail)

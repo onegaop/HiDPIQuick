@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import ServiceManagement
 
 enum SystemControlError: LocalizedError {
     case commandFailed(String)
@@ -44,8 +45,34 @@ final class SystemController: @unchecked Sendable {
                 domain: "com.apple.dock",
                 key: "autohide",
                 fallback: false
-            )
+            ),
+            loginLaunch: loginLaunchStatus
         )
+    }
+
+    private var loginLaunchStatus: LoginLaunchStatus {
+        switch SMAppService.mainApp.status {
+        case .enabled: .enabled
+        case .requiresApproval: .pendingApproval
+        case .notRegistered: .off
+        case .notFound: .unavailable
+        @unknown default: .unavailable
+        }
+    }
+
+    func setLaunchAtLogin(_ enabled: Bool) throws {
+        let service = SMAppService.mainApp
+        if enabled {
+            if service.status == .enabled || service.status == .requiresApproval { return }
+            do { try service.register() }
+            catch {
+                // Some configurations report the need for approval via status after register.
+                guard service.status != .requiresApproval else { return }
+                throw error
+            }
+        } else if service.status != .notRegistered && service.status != .notFound {
+            try service.unregister()
+        }
     }
 
     func setKeepAwake(_ enabled: Bool) throws {
