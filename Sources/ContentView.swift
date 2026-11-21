@@ -1,47 +1,91 @@
 import Cocoa
 import SwiftUI
 
+/// Keeps the popover anchored to AppKit's status item; only its content height changes.
+@MainActor
+final class PanelViewport: ObservableObject {
+    @Published var maximumHeight: CGFloat = 450
+}
+
+private struct PanelHeights: PreferenceKey {
+    static let defaultValue: [Part: CGFloat] = [:]
+
+    enum Part: Hashable { case header, body, footer }
+
+    static func reduce(value: inout [Part: CGFloat], nextValue: () -> [Part: CGFloat]) {
+        value.merge(nextValue(), uniquingKeysWith: { _, latest in latest })
+    }
+}
+
+private extension View {
+    func measurePanelHeight(_ part: PanelHeights.Part) -> some View {
+        background {
+            GeometryReader { geometry in
+                Color.clear.preference(key: PanelHeights.self, value: [part: geometry.size.height])
+            }
+        }
+    }
+}
+
+@MainActor
 struct ContentView: View {
-    static let panelSize = NSSize(width: 336, height: 450)
+    static let panelSize = NSSize(width: 336, height: 312)
     @ObservedObject var viewModel: AppViewModel
     var usesNativeGlass = false
+    @ObservedObject var viewport: PanelViewport
+    var onSizeChange: ((NSSize) -> Void)?
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.displayScale) private var displayScale
     @State private var selectedDisplayID: DisplaySnapshot.ID?
+    @State private var measuredHeight: CGFloat = 0
+    @FocusState private var navigationFocus: NavigationFocus?
+    @State private var returnFocus: NavigationFocus?
+
+    init(
+        viewModel: AppViewModel,
+        usesNativeGlass: Bool = false,
+        viewport: PanelViewport? = nil,
+        onSizeChange: ((NSSize) -> Void)? = nil
+    ) {
+        self.viewModel = viewModel
+        self.usesNativeGlass = usesNativeGlass
+        self.viewport = viewport ?? PanelViewport()
+        self.onSizeChange = onSizeChange
+    }
+
+    private enum NavigationFocus: Hashable { case allModes, tools, back }
+
+    private var selectedDisplay: DisplaySnapshot? {
+        viewModel.displays.first { $0.id == selectedDisplayID } ??
+            viewModel.primaryDisplay ?? viewModel.displays.first
+    }
+
+    private var layoutHeight: CGFloat {
+        min(viewport.maximumHeight, measuredHeight > 0 ? measuredHeight : Self.panelSize.height)
+    }
 
     var body: some View {
         VStack(spacing: 0) {
-            HeaderView(viewModel: viewModel)
+            header
+                .fixedSize(horizontal: false, vertical: true)
+                .measurePanelHeight(.header)
 
-            Picker("功能", selection: $viewModel.selectedSection) {
-                ForEach(AppSection.allCases) { section in
-                    Text(section.title).tag(section)
-                }
+            ScrollView(.vertical, showsIndicators: viewModel.selectedSection == .allModes) {
+                pageBody
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 14)
+                    .padding(.top, 6)
+                    .padding(.bottom, 14)
+                    .measurePanelHeight(.body)
             }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .padding(.horizontal, 14)
-            .padding(.top, 1)
-            .padding(.bottom, 10)
+            .id(ScrollIdentity(section: viewModel.selectedSection, displayID: selectedDisplay?.id))
+            .frame(maxHeight: .infinity)
 
-            Group {
-                switch viewModel.selectedSection {
-                case .displays:
-                    DisplaysPane(viewModel: viewModel, selectedDisplayID: $selectedDisplayID)
-                case .controls:
-                    ControlsPane(viewModel: viewModel)
-                }
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            if let feedback = viewModel.feedback {
-                FeedbackView(feedback: feedback, onAction: viewModel.performFeedbackAction)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 6)
-            }
-
-            PanelDivider().padding(.horizontal, 14)
-            FooterView(viewModel: viewModel)
+            footer
+                .fixedSize(horizontal: false, vertical: true)
+                .measurePanelHeight(.footer)
         }
-        .frame(width: Self.panelSize.width, height: Self.panelSize.height)
+        .frame(width: Self.panelSize.width, height: layoutHeight)
         .background {
             if !usesNativeGlass {
                 if reduceTransparency {
@@ -51,25 +95,227 @@ struct ContentView: View {
                 }
             }
         }
+        .onPreferenceChange(PanelHeights.self) { heights in
+            if heights.count == 3 {
+                let scale = max(displayScale, 1)
+                let height = ceil(heights.values.reduce(0, +) * scale) / scale
+                if height.isFinite && height > 0 { measuredHeight = height }
+            }
+        }
+        .onChange(of: layoutHeight) { height in
+            onSizeChange?(NSSize(width: Self.panelSize.width, height: height))
+        }
+        .onChange(of: viewModel.selectedSection) { section in
+            // The target is part of the newly mounted route, not the departing view.
+            Task { @MainActor in
+                guard viewModel.selectedSection == section else { return }
+                navigationFocus = section == .displays ? returnFocus : .back
+            }
+        }
+    }
+
+    private struct ScrollIdentity: Hashable {
+        let section: AppSection
+        let displayID: DisplaySnapshot.ID?
+    }
+
+    @ViewBuilder private var header: some View {
+        if viewModel.selectedSection == .displays {
+            if let display = selectedDisplay {
+                displayCard(display)
+                    .padding(.horizontal, 14)
+                    .padding(.top, 14)
+                    .padding(.bottom, 8)
+            } else {
+                Text("HiDPI Quick")
+                    .font(.headline)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(14)
+            }
+        } else {
+            HStack(spacing: 8) {
+                Button {
+                    viewModel.selectedSection = .displays
+                } label: {
+                    HStack(spacing: 3) {
+                        PanelGlyph("chevron.left", role: .utility)
+                        Text("返回")
+                    }
+                }
+                .focused($navigationFocus, equals: .back)
+                .accessibilityLabel("返回显示器首页")
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(viewModel.selectedSection.title).font(.headline).accessibilityAddTraits(.isHeader)
+                    if viewModel.selectedSection == .allModes, let display = selectedDisplay {
+                        HStack(spacing: 6) {
+                            Text(displayName(display)).lineLimit(1).help(displayName(display))
+                            if let mode = display.currentMode {
+                                Text("当前 \(mode.logicalResolution)").monospacedDigit()
+                            }
+                        }
+                        .font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+        }
+    }
+
+    private func displayName(_ display: DisplaySnapshot) -> String {
+        let matching = viewModel.displays.filter { $0.name == display.name }
+        guard matching.count > 1, let index = matching.firstIndex(where: { $0.id == display.id }) else {
+            return display.name
+        }
+        return "\(display.name) · \(index + 1)"
+    }
+
+    private func displayCard(_ display: DisplaySnapshot) -> some View {
+        VStack(alignment: .leading, spacing: 9) {
+            HStack(spacing: 6) {
+                PanelGlyph(display.isBuiltin ? "laptopcomputer" : "display")
+                    .foregroundStyle(.secondary)
+                if viewModel.displays.count > 1 {
+                    Menu {
+                        ForEach(viewModel.displays) { item in
+                            Button {
+                                selectedDisplayID = item.id
+                            } label: {
+                                if item.id == display.id {
+                                    Label(displayName(item), systemImage: "checkmark")
+                                } else {
+                                    Text(displayName(item))
+                                }
+                            }
+                        }
+                    } label: {
+                        Text(displayName(display)).font(.subheadline.weight(.semibold)).lineLimit(1)
+                    }
+                    .menuStyle(.borderlessButton)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityLabel("选择显示器")
+                    .accessibilityValue(displayName(display))
+                    .help(displayName(display))
+                } else {
+                    Text(displayName(display))
+                        .font(.subheadline.weight(.semibold)).lineLimit(1).help(displayName(display))
+                }
+                Spacer(minLength: 0)
+                if viewModel.controls.keepAwake {
+                    PanelGlyph("cup.and.saucer", role: .utility, label: "防休眠已开启")
+                        .foregroundStyle(.secondary)
+                        .help("防休眠已开启")
+                }
+            }
+
+            if let mode = display.currentMode {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text("当前").font(.caption).foregroundStyle(.secondary)
+                    Text(mode.logicalResolution)
+                        .font(.system(size: 24, weight: .semibold)).monospacedDigit()
+                        .lineLimit(1).minimumScaleFactor(0.75)
+                    Spacer(minLength: 0)
+                    Text(mode.isHiDPI ? "2× HiDPI" : "非 HiDPI")
+                        .font(.caption.weight(.semibold))
+                    Text(mode.presentationRefresh)
+                        .font(.caption).monospacedDigit()
+                }
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("当前分辨率 \(mode.logicalResolution)，\(mode.isHiDPI ? "2× HiDPI" : "非 HiDPI")，\(mode.presentationRefresh)，渲染尺寸 \(mode.backingResolution)")
+                .help("渲染尺寸 \(mode.backingResolution)")
+            } else {
+                Text("无法读取当前分辨率").font(.callout).foregroundStyle(.secondary)
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.primary.opacity(0.055), in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    @ViewBuilder private var pageBody: some View {
+        if viewModel.selectedSection == .controls {
+            ControlsPane(viewModel: viewModel)
+        } else if let display = selectedDisplay {
+            VStack(alignment: .leading, spacing: 5) {
+                if display.modes.isEmpty {
+                    Text("当前没有可选的 HiDPI 分辨率")
+                        .font(.callout).foregroundStyle(.secondary).padding(.vertical, 6)
+                } else {
+                    SectionLabel(title: viewModel.selectedSection == .displays ? "快捷分辨率" : "2× HiDPI 分辨率")
+                        .accessibilityAddTraits(.isHeader)
+                    let modes = viewModel.selectedSection == .displays ? display.featuredModes : display.modes
+                    ForEach(modes) { mode in
+                        ModeRow(
+                            mode: mode,
+                            isSelected: display.currentMode?.matches(mode) == true,
+                            showsRefreshRate: display.modes.contains {
+                                $0.width == mode.width && $0.height == mode.height && $0.id != mode.id
+                            },
+                            isBusy: viewModel.activeModeID == mode.id,
+                            isDisabled: viewModel.activeModeID != nil || display.currentMode == nil,
+                            action: { viewModel.selectMode(mode) }
+                        )
+                    }
+                }
+            }
+        } else {
+            EmptyStateView(
+                icon: "display.trianglebadge.exclamationmark",
+                title: "未检测到显示器",
+                actionTitle: "重新检测",
+                action: viewModel.refresh
+            )
+        }
+    }
+
+    private var footer: some View {
+        VStack(spacing: 0) {
+            if let feedback = viewModel.feedback {
+                FeedbackView(feedback: feedback, onAction: viewModel.performFeedbackAction)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+            }
+            PanelDivider().padding(.horizontal, 14)
+            if viewModel.selectedSection == .displays {
+                HStack(spacing: 8) {
+                    routeButton("全部模式", icon: "list.bullet", section: .allModes, focus: .allModes)
+                        .disabled(selectedDisplay?.modes.isEmpty != false)
+                    routeButton("系统工具", icon: "slider.horizontal.3", section: .controls, focus: .tools)
+                }
+                .padding(.horizontal, 14)
+                .padding(.top, 6)
+                .padding(.bottom, 10)
+            } else {
+                FooterView(viewModel: viewModel)
+            }
+        }
+    }
+
+    private func routeButton(_ title: String, icon: String, section: AppSection, focus: NavigationFocus) -> some View {
+        Button {
+            returnFocus = focus
+            viewModel.selectedSection = section
+        } label: {
+            HStack(spacing: 4) {
+                PanelGlyph(icon, role: .utility)
+                Text(title).font(.callout.weight(.medium))
+                Spacer(minLength: 0)
+                PanelGlyph("chevron.right", role: .utility).foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 6)
+            .frame(maxWidth: .infinity, minHeight: 28)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.borderless)
+        .focused($navigationFocus, equals: focus)
     }
 }
 
-private struct HeaderView: View {
-    @ObservedObject var viewModel: AppViewModel
-
-    var body: some View {
-        HStack(spacing: 7) {
-            PanelGlyph("display.2", role: .brand).foregroundStyle(.secondary)
-            Text("HiDPI Quick").font(.subheadline.weight(.semibold)).foregroundStyle(.secondary)
-            Spacer()
-            if viewModel.controls.keepAwake {
-                PanelGlyph("cup.and.saucer", role: .utility, label: "防休眠已开启")
-                    .foregroundStyle(.secondary)
-                    .help("防休眠已开启")
-            }
-        }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 8)
+private extension DisplayMode {
+    var presentationRefresh: String {
+        guard refreshRate > 0 else { return "自动刷新率" }
+        return "\(refreshRate.formatted(.number.precision(.fractionLength(0...2)))) Hz"
     }
 }
 
@@ -133,148 +379,6 @@ private struct PanelGlyph: View {
     }
 }
 
-private struct DisplaysPane: View {
-    @ObservedObject var viewModel: AppViewModel
-    @Binding var selectedDisplayID: DisplaySnapshot.ID?
-
-    private var selectedDisplay: DisplaySnapshot? {
-        viewModel.displays.first { $0.id == selectedDisplayID } ??
-            viewModel.primaryDisplay ?? viewModel.displays.first
-    }
-
-    var body: some View {
-        if let display = selectedDisplay {
-            ScrollView(.vertical, showsIndicators: false) {
-                VStack(alignment: .leading, spacing: 8) {
-                    if viewModel.displays.count > 1 {
-                        Picker("显示器", selection: Binding(
-                            get: { selectedDisplay?.id ?? display.id },
-                            set: { selectedDisplayID = $0 }
-                        )) {
-                            ForEach(viewModel.displays) { item in
-                                Text(item.name).tag(item.id)
-                            }
-                        }
-                        .pickerStyle(.menu)
-                        .controlSize(.small)
-                    }
-                    DisplaySection(
-                        display: display,
-                        showName: viewModel.displays.count == 1,
-                        activeModeID: viewModel.activeModeID,
-                        onSelect: viewModel.selectMode
-                    )
-                    .id(display.id)
-                }
-                .padding(.horizontal, 14)
-                .padding(.bottom, 8)
-            }
-        } else {
-            EmptyStateView(
-                icon: "display.trianglebadge.exclamationmark",
-                title: "未检测到显示器",
-                actionTitle: "重新检测",
-                action: viewModel.refresh
-            )
-        }
-    }
-}
-
-private struct DisplaySection: View {
-    let display: DisplaySnapshot
-    let showName: Bool
-    let activeModeID: String?
-    let onSelect: (DisplayMode) -> Void
-    @State private var showsAllModes = false
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(alignment: .center, spacing: 9) {
-                PanelGlyph(display.isBuiltin ? "laptopcomputer" : "display")
-                    .foregroundStyle(.secondary)
-                VStack(alignment: .leading, spacing: 3) {
-                    if showName {
-                        Text(display.name)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                            .help(display.name)
-                    }
-                    if let mode = display.currentMode {
-                        Text(mode.logicalResolution)
-                            .font(.headline)
-                            .monospacedDigit()
-                        Text("渲染尺寸 \(mode.backingResolution)")
-                            .font(.caption)
-                            .monospacedDigit()
-                            .foregroundStyle(.secondary)
-                    } else {
-                        Text("无法读取分辨率").font(.callout)
-                    }
-                }
-                Spacer(minLength: 6)
-                if let mode = display.currentMode {
-                    VStack(alignment: .trailing, spacing: 3) {
-                        Text(mode.isHiDPI ? "2× HiDPI" : "非 HiDPI")
-                            .font(.caption.weight(.semibold))
-                        Text(mode.refreshRate > 0 ? mode.refreshRateText : "自动刷新率")
-                            .font(.caption)
-                            .monospacedDigit()
-                    }
-                    .foregroundStyle(.secondary)
-                }
-            }
-            .padding(.vertical, 6)
-            .accessibilityElement(children: .combine)
-            .accessibilityLabel(currentStatusLabel)
-
-            PanelDivider().padding(.vertical, 3)
-
-            if display.modes.isEmpty {
-                Text("当前没有可选的 HiDPI 分辨率")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .padding(.vertical, 6)
-            } else {
-                SectionLabel(title: "2× HiDPI 分辨率")
-                modeRows(display.featuredModes)
-                if !display.additionalModes.isEmpty {
-                    DisclosureGroup(isExpanded: $showsAllModes) {
-                        modeRows(display.additionalModes)
-                            .padding(.top, 4)
-                    } label: {
-                        Text(showsAllModes ? "收起其他 HiDPI 模式" : "展开其他 \(display.additionalModes.count) 个 HiDPI 模式")
-                    }
-                    .font(.callout)
-                }
-            }
-        }
-    }
-
-    private var currentStatusLabel: String {
-        guard let mode = display.currentMode else { return "\(display.name)，无法读取当前分辨率" }
-        let scale = mode.isHiDPI ? "2× HiDPI" : "非 HiDPI"
-        return "\(display.name)，当前 \(mode.logicalResolution)，\(scale)，渲染尺寸 \(mode.backingResolution)，\(mode.refreshRateText)"
-    }
-
-    private func modeRows(_ modes: [DisplayMode]) -> some View {
-        VStack(spacing: 2) {
-            ForEach(modes) { mode in
-                ModeRow(
-                    mode: mode,
-                    isSelected: display.currentMode?.matches(mode) == true,
-                    showsRefreshRate: display.modes.contains {
-                        $0.width == mode.width && $0.height == mode.height && $0.id != mode.id
-                    },
-                    isBusy: activeModeID == mode.id,
-                    isDisabled: activeModeID != nil || display.currentMode == nil,
-                    action: { onSelect(mode) }
-                )
-            }
-        }
-    }
-}
-
 private struct ModeRow: View {
     let mode: DisplayMode
     let isSelected: Bool
@@ -328,8 +432,7 @@ private struct ModeRow: View {
     }
 
     private var compactRefresh: String {
-        let value = mode.refreshRate.formatted(.number.precision(.fractionLength(0...2)))
-        return "\(value) Hz"
+        mode.presentationRefresh
     }
 }
 
@@ -337,81 +440,77 @@ private struct ControlsPane: View {
     @ObservedObject var viewModel: AppViewModel
 
     var body: some View {
-        ScrollView(.vertical, showsIndicators: false) {
-            VStack(alignment: .leading, spacing: 6) {
-                SectionLabel(title: "系统开关")
+        VStack(alignment: .leading, spacing: 6) {
+            SectionLabel(title: "系统开关")
 
-                VStack(spacing: 0) {
-                    ToggleControlRow(
-                        icon: "cup.and.saucer.fill",
-                        title: "防休眠",
-                        subtitle: viewModel.controls.keepAwake ? "已启用，退出 App 时自动关闭" : "阻止系统休眠和自动屏保",
-                        isOn: binding(viewModel.controls.keepAwake, action: viewModel.setKeepAwake),
-                        isBusy: viewModel.activeControl == .keepAwake,
-                        isInteractionDisabled: viewModel.activeControl != nil
-                    )
-                    rowDivider
-                    ToggleControlRow(
-                        icon: "moon.fill",
-                        title: "深色模式",
-                        subtitle: viewModel.controls.darkMode ? "当前使用深色外观" : "当前使用浅色外观",
-                        isOn: binding(viewModel.controls.darkMode, action: viewModel.setDarkMode),
-                        isBusy: viewModel.activeControl == .darkMode,
-                        isInteractionDisabled: viewModel.activeControl != nil
-                    )
-                    rowDivider
-                    ToggleControlRow(
-                        icon: "desktopcomputer",
-                        title: "隐藏桌面图标",
-                        subtitle: viewModel.controls.desktopIconsHidden ? "桌面图标已隐藏" : "桌面图标正常显示",
-                        isOn: binding(viewModel.controls.desktopIconsHidden, action: viewModel.setDesktopIconsHidden),
-                        isBusy: viewModel.activeControl == .desktopIcons,
-                        isInteractionDisabled: viewModel.activeControl != nil
-                    )
-                    rowDivider
-                    ToggleControlRow(
-                        icon: "eye.fill",
-                        title: "显示隐藏文件",
-                        subtitle: viewModel.controls.hiddenFilesVisible ? "Finder 正在显示隐藏项目" : "Finder 当前不显示隐藏文件",
-                        isOn: binding(viewModel.controls.hiddenFilesVisible, action: viewModel.setHiddenFilesVisible),
-                        isBusy: viewModel.activeControl == .hiddenFiles,
-                        isInteractionDisabled: viewModel.activeControl != nil
-                    )
-                    rowDivider
-                    ToggleControlRow(
-                        icon: "dock.rectangle",
-                        title: "Dock 自动隐藏",
-                        subtitle: viewModel.controls.dockAutoHide ? "移到屏幕边缘时显示 Dock" : "Dock 保持显示",
-                        isOn: binding(viewModel.controls.dockAutoHide, action: viewModel.setDockAutoHide),
-                        isBusy: viewModel.activeControl == .dockAutoHide,
-                        isInteractionDisabled: viewModel.activeControl != nil
-                    )
-                }
-                .controlGroupStyle()
-
-                SectionLabel(title: "快捷动作")
-
-                VStack(spacing: 0) {
-                    ActionRow(
-                        icon: "play.rectangle.fill",
-                        title: "启动屏幕保护程序",
-                        isBusy: viewModel.activeControl == .screenSaver,
-                        isInteractionDisabled: viewModel.activeControl != nil,
-                        action: viewModel.startScreenSaver
-                    )
-                    rowDivider
-                    ActionRow(
-                        icon: "moon.zzz.fill",
-                        title: "立即关闭显示器",
-                        isBusy: viewModel.activeControl == .displaySleep,
-                        isInteractionDisabled: viewModel.activeControl != nil,
-                        action: viewModel.sleepDisplays
-                    )
-                }
-                .controlGroupStyle()
+            VStack(spacing: 0) {
+                ToggleControlRow(
+                    icon: "cup.and.saucer.fill",
+                    title: "防休眠",
+                    subtitle: viewModel.controls.keepAwake ? "已启用，退出 App 时自动关闭" : "阻止系统休眠和自动屏保",
+                    isOn: binding(viewModel.controls.keepAwake, action: viewModel.setKeepAwake),
+                    isBusy: viewModel.activeControl == .keepAwake,
+                    isInteractionDisabled: viewModel.activeControl != nil
+                )
+                rowDivider
+                ToggleControlRow(
+                    icon: "moon.fill",
+                    title: "深色模式",
+                    subtitle: viewModel.controls.darkMode ? "当前使用深色外观" : "当前使用浅色外观",
+                    isOn: binding(viewModel.controls.darkMode, action: viewModel.setDarkMode),
+                    isBusy: viewModel.activeControl == .darkMode,
+                    isInteractionDisabled: viewModel.activeControl != nil
+                )
+                rowDivider
+                ToggleControlRow(
+                    icon: "desktopcomputer",
+                    title: "隐藏桌面图标",
+                    subtitle: viewModel.controls.desktopIconsHidden ? "桌面图标已隐藏" : "桌面图标正常显示",
+                    isOn: binding(viewModel.controls.desktopIconsHidden, action: viewModel.setDesktopIconsHidden),
+                    isBusy: viewModel.activeControl == .desktopIcons,
+                    isInteractionDisabled: viewModel.activeControl != nil
+                )
+                rowDivider
+                ToggleControlRow(
+                    icon: "eye.fill",
+                    title: "显示隐藏文件",
+                    subtitle: viewModel.controls.hiddenFilesVisible ? "Finder 正在显示隐藏项目" : "Finder 当前不显示隐藏文件",
+                    isOn: binding(viewModel.controls.hiddenFilesVisible, action: viewModel.setHiddenFilesVisible),
+                    isBusy: viewModel.activeControl == .hiddenFiles,
+                    isInteractionDisabled: viewModel.activeControl != nil
+                )
+                rowDivider
+                ToggleControlRow(
+                    icon: "dock.rectangle",
+                    title: "Dock 自动隐藏",
+                    subtitle: viewModel.controls.dockAutoHide ? "移到屏幕边缘时显示 Dock" : "Dock 保持显示",
+                    isOn: binding(viewModel.controls.dockAutoHide, action: viewModel.setDockAutoHide),
+                    isBusy: viewModel.activeControl == .dockAutoHide,
+                    isInteractionDisabled: viewModel.activeControl != nil
+                )
             }
-            .padding(.horizontal, 14)
-            .padding(.bottom, 14)
+            .controlGroupStyle()
+
+            SectionLabel(title: "快捷动作")
+
+            VStack(spacing: 0) {
+                ActionRow(
+                    icon: "play.rectangle.fill",
+                    title: "启动屏幕保护程序",
+                    isBusy: viewModel.activeControl == .screenSaver,
+                    isInteractionDisabled: viewModel.activeControl != nil,
+                    action: viewModel.startScreenSaver
+                )
+                rowDivider
+                ActionRow(
+                    icon: "moon.zzz.fill",
+                    title: "立即关闭显示器",
+                    isBusy: viewModel.activeControl == .displaySleep,
+                    isInteractionDisabled: viewModel.activeControl != nil,
+                    action: viewModel.sleepDisplays
+                )
+            }
+            .controlGroupStyle()
         }
     }
 

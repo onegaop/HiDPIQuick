@@ -79,6 +79,9 @@ struct DisplaySnapshot: Identifiable {
             indexes.formUnion(0..<min(3, modes.count))
         }
 
+        for index in modes.indices where indexes.count < min(3, modes.count) {
+            indexes.insert(index)
+        }
         return indexes.sorted().prefix(4).map { modes[$0] }
     }
 
@@ -108,6 +111,7 @@ struct SystemControlSnapshot: Equatable {
 
 enum AppSection: String, CaseIterable, Identifiable {
     case displays
+    case allModes
     case controls
 
     var id: String { rawValue }
@@ -115,7 +119,8 @@ enum AppSection: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .displays: return "显示器"
-        case .controls: return "快捷控制"
+        case .allModes: return "全部模式"
+        case .controls: return "系统工具"
         }
     }
 }

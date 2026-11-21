@@ -6,6 +6,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     private let popover = NSPopover()
     private let viewModel = AppViewModel()
+    private let viewport = PanelViewport()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
@@ -24,12 +25,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         popover.animates = false
         popover.delegate = self
         popover.contentSize = ContentView.panelSize
+        let resize: (NSSize) -> Void = { [weak self] size in
+            guard let self, self.popover.contentSize != size else { return }
+            self.popover.contentSize = size
+        }
         if #available(macOS 26.0, *) {
-            popover.contentViewController = GlassPopoverController(viewModel: viewModel)
-        } else {
-            popover.contentViewController = NSHostingController(
-                rootView: ContentView(viewModel: viewModel)
+            popover.contentViewController = GlassPopoverController(
+                viewModel: viewModel, viewport: viewport, onSizeChange: resize
             )
+        } else {
+            let host = NSHostingController(
+                rootView: ContentView(viewModel: viewModel, viewport: viewport, onSizeChange: resize)
+            )
+            host.sizingOptions = []
+            popover.contentViewController = host
         }
 
         viewModel.onStatusChanged = { [weak self] in
@@ -79,6 +88,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         if popover.isShown {
             popover.performClose(sender)
         } else {
+            viewModel.selectedSection = .displays
             showPopover()
         }
     }
@@ -92,6 +102,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
 
     private func showPopover() {
         guard let button = statusItem.button else { return }
+        if let window = button.window, let screen = window.screen {
+            let anchor = window.convertToScreen(button.convert(button.bounds, to: nil))
+            let availableBelow = anchor.minY - screen.visibleFrame.minY - 20
+            viewport.maximumHeight = min(450, max(1, floor(availableBelow)))
+            if popover.contentSize.height > viewport.maximumHeight {
+                popover.contentSize.height = viewport.maximumHeight
+            }
+        } else {
+            viewport.maximumHeight = 450
+        }
         viewModel.refresh()
         popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
         NSApp.activate(ignoringOtherApps: true)
