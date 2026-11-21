@@ -196,6 +196,19 @@ struct ContentView: View {
                     Text(viewModel.selectedSection.title)
                         .font(PanelType.heading)
                         .accessibilityAddTraits(.isHeader)
+
+                    if viewModel.selectedSection == .allModes {
+                        Spacer(minLength: 8)
+                        Button(action: viewModel.openDisplaysSettings) {
+                            PanelGlyph("display", role: .utility)
+                                .frame(width: 28, height: 28)
+                                .background(.quaternary, in: Circle())
+                                .contentShape(Circle())
+                        }
+                        .buttonStyle(.borderless)
+                        .accessibilityLabel("打开显示器设置")
+                        .help("打开 macOS 显示器设置")
+                    }
                 }
 
                 if viewModel.selectedSection == .allModes, let display = selectedDisplay {
@@ -886,12 +899,6 @@ private struct FooterView: View {
 
     var body: some View {
         HStack(spacing: 6) {
-            FooterButton(
-                icon: "display",
-                label: "打开显示器设置",
-                title: "显示器设置",
-                action: viewModel.openDisplaysSettings
-            )
             FooterButton(
                 icon: "arrow.clockwise",
                 label: "刷新状态",
