@@ -79,6 +79,9 @@ struct DisplaySnapshot: Identifiable {
             indexes.formUnion(0..<min(3, modes.count))
         }
 
+        for index in modes.indices where indexes.count < min(3, modes.count) {
+            indexes.insert(index)
+        }
         return indexes.sorted().prefix(4).map { modes[$0] }
     }
 
@@ -88,12 +91,28 @@ struct DisplaySnapshot: Identifiable {
     }
 }
 
+enum LoginLaunchStatus: Equatable {
+    case off, enabled, pendingApproval, unavailable
+
+    var isRequested: Bool { self == .enabled || self == .pendingApproval }
+
+    var subtitle: String {
+        switch self {
+        case .off: "登录 Mac 后自动打开本应用"
+        case .enabled: "登录 Mac 时自动启动"
+        case .pendingApproval: "等待批准 · 打开登录项"
+        case .unavailable: "当前无法管理登录项"
+        }
+    }
+}
+
 struct SystemControlSnapshot: Equatable {
     let keepAwake: Bool
     let darkMode: Bool
     let desktopIconsHidden: Bool
     let hiddenFilesVisible: Bool
     let dockAutoHide: Bool
+    var loginLaunch: LoginLaunchStatus = .off
 
     func updating(_ identifier: ControlIdentifier, to value: Bool) -> SystemControlSnapshot {
         SystemControlSnapshot(
@@ -101,13 +120,15 @@ struct SystemControlSnapshot: Equatable {
             darkMode: identifier == .darkMode ? value : darkMode,
             desktopIconsHidden: identifier == .desktopIcons ? value : desktopIconsHidden,
             hiddenFilesVisible: identifier == .hiddenFiles ? value : hiddenFilesVisible,
-            dockAutoHide: identifier == .dockAutoHide ? value : dockAutoHide
+            dockAutoHide: identifier == .dockAutoHide ? value : dockAutoHide,
+            loginLaunch: identifier == .launchAtLogin ? (value ? .enabled : .off) : loginLaunch
         )
     }
 }
 
 enum AppSection: String, CaseIterable, Identifiable {
     case displays
+    case allModes
     case controls
 
     var id: String { rawValue }
@@ -115,7 +136,8 @@ enum AppSection: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .displays: return "显示器"
-        case .controls: return "快捷控制"
+        case .allModes: return "全部模式"
+        case .controls: return "系统工具"
         }
     }
 }
@@ -126,6 +148,7 @@ enum ControlIdentifier: String {
     case desktopIcons
     case hiddenFiles
     case dockAutoHide
+    case launchAtLogin
     case screenSaver
     case displaySleep
 }
@@ -137,11 +160,13 @@ enum FeedbackTone {
 
 enum FeedbackAction {
     case openAutomationSettings
+    case openLoginItems
     case openDisplaysSettings
 
     var title: String {
         switch self {
         case .openAutomationSettings: return "打开权限设置"
+        case .openLoginItems: return "打开登录项"
         case .openDisplaysSettings: return "打开显示器设置"
         }
     }
@@ -152,4 +177,10 @@ struct AppFeedback: Identifiable {
     let message: String
     let tone: FeedbackTone
     let action: FeedbackAction?
+}
+
+
+struct ControlFeedback {
+    let control: ControlIdentifier
+    let feedback: AppFeedback
 }

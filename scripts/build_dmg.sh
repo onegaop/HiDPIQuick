@@ -36,7 +36,8 @@ swiftc \
     -o "$APP_BUNDLE/Contents/MacOS/HiDPIQuick" \
     -framework Cocoa \
     -framework CoreGraphics \
-    -framework IOKit
+    -framework IOKit \
+    -framework ServiceManagement
 
 chmod +x "$APP_BUNDLE/Contents/MacOS/HiDPIQuick"
 codesign --force --deep --sign - "$APP_BUNDLE" >/dev/null

@@ -1,8 +1,10 @@
 import AppKit
 import Foundation
+import ServiceManagement
 
 enum SystemControlError: LocalizedError {
     case commandFailed(String)
+    case automationDenied
     case automationFailed(String)
     case actionUnavailable(String)
     case stateNotApplied(String)
@@ -11,6 +13,8 @@ enum SystemControlError: LocalizedError {
         switch self {
         case .commandFailed(let message):
             return message.isEmpty ? "系统命令执行失败" : message
+        case .automationDenied:
+            return "未获得控制系统事件的权限"
         case .automationFailed(let message):
             return message.isEmpty ? "自动化操作失败，请检查系统权限" : message
         case .actionUnavailable(let message), .stateNotApplied(let message):
@@ -41,8 +45,34 @@ final class SystemController: @unchecked Sendable {
                 domain: "com.apple.dock",
                 key: "autohide",
                 fallback: false
-            )
+            ),
+            loginLaunch: loginLaunchStatus
         )
+    }
+
+    private var loginLaunchStatus: LoginLaunchStatus {
+        switch SMAppService.mainApp.status {
+        case .enabled: .enabled
+        case .requiresApproval: .pendingApproval
+        case .notRegistered: .off
+        case .notFound: .unavailable
+        @unknown default: .unavailable
+        }
+    }
+
+    func setLaunchAtLogin(_ enabled: Bool) throws {
+        let service = SMAppService.mainApp
+        if enabled {
+            if service.status == .enabled || service.status == .requiresApproval { return }
+            do { try service.register() }
+            catch {
+                // Some configurations report the need for approval via status after register.
+                guard service.status != .requiresApproval else { return }
+                throw error
+            }
+        } else if service.status != .notRegistered && service.status != .notFound {
+            try service.unregister()
+        }
     }
 
     func setKeepAwake(_ enabled: Bool) throws {
@@ -80,6 +110,10 @@ final class SystemController: @unchecked Sendable {
         var errorInfo: NSDictionary?
         _ = script.executeAndReturnError(&errorInfo)
         if let errorInfo {
+            // -1743 is Apple Events' permission denial, not a generic script failure.
+            if (errorInfo[NSAppleScript.errorNumber] as? NSNumber)?.intValue == -1743 {
+                throw SystemControlError.automationDenied
+            }
             let message = errorInfo[NSAppleScript.errorMessage] as? String ?? "请允许 HiDPI Quick 控制系统事件"
             throw SystemControlError.automationFailed(message)
         }

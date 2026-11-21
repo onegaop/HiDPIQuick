@@ -1,47 +1,124 @@
 import Cocoa
 import SwiftUI
 
+/// Keeps the popover anchored to AppKit's status item; only its content height changes.
+@MainActor
+final class PanelViewport: ObservableObject {
+    @Published var maximumHeight: CGFloat = 450
+}
+
+private struct PanelHeights: PreferenceKey {
+    static let defaultValue: [Part: CGFloat] = [:]
+
+    enum Part: Hashable { case header, body, footer }
+
+    static func reduce(value: inout [Part: CGFloat], nextValue: () -> [Part: CGFloat]) {
+        value.merge(nextValue(), uniquingKeysWith: { _, latest in latest })
+    }
+}
+
+private extension View {
+    func measurePanelHeight(_ part: PanelHeights.Part) -> some View {
+        background {
+            GeometryReader { geometry in
+                Color.clear.preference(key: PanelHeights.self, value: [part: geometry.size.height])
+            }
+        }
+    }
+}
+
+private enum PanelGrid {
+    static let edge: CGFloat = 14
+    static let rowInset: CGFloat = 8
+    static let columnGap: CGFloat = 8
+    static let markWidth: CGFloat = 16
+    // The system overlay scroller can grow on hover. Keep it off the row surface.
+    static let modeScrollerClearance: CGFloat = 4
+}
+
+/// Shared typographic roles across the three routes of the panel.
+private enum PanelType {
+    static let reading: Font = .system(size: 13)
+    static let action: Font = reading.weight(.medium)
+    static let selected: Font = reading.weight(.semibold)
+    static let heading: Font = .system(size: 15, weight: .semibold)
+    static let resolution: Font = .system(size: 20, weight: .medium)
+    static let detail: Font = .system(size: 12)
+    static let label: Font = detail.weight(.medium)
+    static let detailInk = Color.primary.opacity(0.80)
+}
+
+@MainActor
 struct ContentView: View {
-    static let panelSize = NSSize(width: 336, height: 450)
+    static let panelSize = NSSize(width: 336, height: 312)
     @ObservedObject var viewModel: AppViewModel
     var usesNativeGlass = false
+    @ObservedObject var viewport: PanelViewport
+    var onSizeChange: ((NSSize) -> Void)?
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.displayScale) private var displayScale
     @State private var selectedDisplayID: DisplaySnapshot.ID?
+    @State private var measuredHeight: CGFloat = 0
+    @FocusState private var navigationFocus: NavigationFocus?
+    @State private var returnFocus: NavigationFocus?
+
+    init(
+        viewModel: AppViewModel,
+        usesNativeGlass: Bool = false,
+        viewport: PanelViewport? = nil,
+        onSizeChange: ((NSSize) -> Void)? = nil
+    ) {
+        self.viewModel = viewModel
+        self.usesNativeGlass = usesNativeGlass
+        self.viewport = viewport ?? PanelViewport()
+        self.onSizeChange = onSizeChange
+    }
+
+    private enum NavigationFocus: Hashable { case allModes, tools, back }
+
+    private var selectedDisplay: DisplaySnapshot? {
+        viewModel.displays.first { $0.id == selectedDisplayID } ??
+            viewModel.primaryDisplay ?? viewModel.displays.first
+    }
+
+    private var layoutHeight: CGFloat {
+        min(viewport.maximumHeight, measuredHeight > 0 ? measuredHeight : Self.panelSize.height)
+    }
+
+    private var trailingContentInset: CGFloat {
+        // Legacy scrollers reserve their own space. Overlay rails share the viewport.
+        let usesOverlayScroller = showsScrollIndicators && NSScroller.preferredScrollerStyle == .overlay
+        return PanelGrid.edge + (usesOverlayScroller ? PanelGrid.modeScrollerClearance : 0)
+    }
+
+    private var showsScrollIndicators: Bool {
+        viewModel.selectedSection == .allModes ||
+            (viewModel.selectedSection == .controls && measuredHeight > viewport.maximumHeight)
+    }
 
     var body: some View {
         VStack(spacing: 0) {
-            HeaderView(viewModel: viewModel)
+            header
+                .fixedSize(horizontal: false, vertical: true)
+                .measurePanelHeight(.header)
 
-            Picker("功能", selection: $viewModel.selectedSection) {
-                ForEach(AppSection.allCases) { section in
-                    Text(section.title).tag(section)
-                }
+            ScrollView(.vertical, showsIndicators: showsScrollIndicators) {
+                pageBody
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.leading, PanelGrid.edge)
+                    .padding(.trailing, trailingContentInset)
+                    .padding(.top, 6)
+                    .padding(.bottom, viewModel.selectedSection == .controls ? 9 : 14)
+                    .measurePanelHeight(.body)
             }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .padding(.horizontal, 14)
-            .padding(.top, 1)
-            .padding(.bottom, 10)
+            .id(ScrollIdentity(section: viewModel.selectedSection, displayID: selectedDisplay?.id))
+            .frame(maxHeight: .infinity)
 
-            Group {
-                switch viewModel.selectedSection {
-                case .displays:
-                    DisplaysPane(viewModel: viewModel, selectedDisplayID: $selectedDisplayID)
-                case .controls:
-                    ControlsPane(viewModel: viewModel)
-                }
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            if let feedback = viewModel.feedback {
-                FeedbackView(feedback: feedback, onAction: viewModel.performFeedbackAction)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 6)
-            }
-
-            PanelDivider().padding(.horizontal, 14)
-            FooterView(viewModel: viewModel)
+            footer
+                .fixedSize(horizontal: false, vertical: true)
+                .measurePanelHeight(.footer)
         }
-        .frame(width: Self.panelSize.width, height: Self.panelSize.height)
+        .frame(width: Self.panelSize.width, height: layoutHeight)
         .background {
             if !usesNativeGlass {
                 if reduceTransparency {
@@ -51,25 +128,280 @@ struct ContentView: View {
                 }
             }
         }
+        .overlay(alignment: .bottom) {
+            if viewModel.selectedSection == .controls,
+               let result = viewModel.controlFeedback, result.feedback.tone == .warning {
+                feedbackBanner(result.feedback, dismiss: viewModel.dismissControlFeedback)
+            } else if let feedback = viewModel.feedback {
+                feedbackBanner(feedback, dismiss: viewModel.dismissFeedback)
+            }
+        }
+        .onPreferenceChange(PanelHeights.self) { heights in
+            if heights.count == 3 {
+                let scale = max(displayScale, 1)
+                let height = ceil(heights.values.reduce(0, +) * scale) / scale
+                if height.isFinite && height > 0 { measuredHeight = height }
+            }
+        }
+        .onChange(of: layoutHeight) { height in
+            onSizeChange?(NSSize(width: Self.panelSize.width, height: height))
+        }
+        .onChange(of: viewModel.selectedSection) { section in
+            // The target is part of the newly mounted route, not the departing view.
+            Task { @MainActor in
+                guard viewModel.selectedSection == section else { return }
+                navigationFocus = section == .displays ? returnFocus : .back
+            }
+        }
+    }
+
+    private struct ScrollIdentity: Hashable {
+        let section: AppSection
+        let displayID: DisplaySnapshot.ID?
+    }
+
+    @ViewBuilder private var header: some View {
+        if viewModel.selectedSection == .displays {
+            if let display = selectedDisplay {
+                VStack(spacing: 0) {
+                    displaySummary(display)
+                        .padding(.top, 15)
+                        .padding(.bottom, 12)
+                    PanelDivider()
+                }
+                .padding(.horizontal, PanelGrid.edge)
+            } else {
+                Text("HiDPI Quick")
+                    .font(PanelType.heading)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(14)
+            }
+        } else {
+            VStack(alignment: .leading, spacing: 5) {
+                HStack(spacing: 6) {
+                    Button {
+                        viewModel.selectedSection = .displays
+                    } label: {
+                        Image(systemName: "chevron.left")
+                            .font(.system(size: 11, weight: .semibold))
+                            .frame(width: 28, height: 28)
+                            .background(.quaternary, in: Circle())
+                            .contentShape(Circle())
+                    }
+                    .buttonStyle(.borderless)
+                    .focused($navigationFocus, equals: .back)
+                    .accessibilityLabel("返回显示器首页")
+                    .help("返回")
+
+                    Text(viewModel.selectedSection.title)
+                        .font(PanelType.heading)
+                        .accessibilityAddTraits(.isHeader)
+
+                    if viewModel.selectedSection == .allModes {
+                        Spacer(minLength: 8)
+                        Button(action: viewModel.openDisplaysSettings) {
+                            PanelGlyph("display", role: .utility)
+                                .frame(width: 28, height: 28)
+                                .background(.quaternary, in: Circle())
+                                .contentShape(Circle())
+                        }
+                        .buttonStyle(.borderless)
+                        .accessibilityLabel("打开显示器设置")
+                        .help("打开 macOS 显示器设置")
+                    }
+                }
+
+                if viewModel.selectedSection == .allModes, let display = selectedDisplay {
+                    modeContext(for: display)
+                }
+            }
+            .padding(.horizontal, PanelGrid.rowInset)
+            .padding(.top, 10)
+            .padding(.bottom, 9)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, PanelGrid.edge)
+        }
+    }
+
+    private func modeContext(for display: DisplaySnapshot) -> some View {
+        let name = displayName(display)
+        let resolution = display.currentMode.map { "当前 \($0.logicalResolution)" }
+        return ViewThatFits(in: .horizontal) {
+            HStack(spacing: 10) {
+                Text(name).fixedSize()
+                if let resolution {
+                    Spacer(minLength: 4)
+                    Text(resolution).monospacedDigit().fixedSize()
+                }
+            }
+            VStack(alignment: .leading, spacing: 2) {
+                Text(name).lineLimit(2).fixedSize(horizontal: false, vertical: true)
+                if let resolution { Text(resolution).monospacedDigit() }
+            }
+        }
+        .font(PanelType.detail)
+        .foregroundStyle(PanelType.detailInk)
+        .help(name)
+    }
+
+    private func displayName(_ display: DisplaySnapshot) -> String {
+        let matching = viewModel.displays.filter { $0.name == display.name }
+        guard matching.count > 1, let index = matching.firstIndex(where: { $0.id == display.id }) else {
+            return display.name
+        }
+        return "\(display.name) · \(index + 1)"
+    }
+
+    private func displaySummary(_ display: DisplaySnapshot) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                PanelGlyph(display.isBuiltin ? "laptopcomputer" : "display", role: .brand)
+                    .foregroundStyle(.secondary)
+                if viewModel.displays.count > 1 {
+                    Menu {
+                        ForEach(viewModel.displays) { item in
+                            Button {
+                                selectedDisplayID = item.id
+                            } label: {
+                                if item.id == display.id {
+                                    Label(displayName(item), systemImage: "checkmark")
+                                } else {
+                                    Text(displayName(item))
+                                }
+                            }
+                        }
+                    } label: {
+                        Text(displayName(display)).font(PanelType.action).lineLimit(1)
+                    }
+                    .menuStyle(.borderlessButton)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityLabel("选择显示器")
+                    .accessibilityValue(displayName(display))
+                    .help(displayName(display))
+                } else {
+                    Text(displayName(display))
+                        .font(PanelType.action).lineLimit(1).help(displayName(display))
+                }
+                Spacer(minLength: 0)
+                if viewModel.controls.keepAwake {
+                    PanelGlyph("cup.and.saucer", role: .utility, label: "防休眠已开启")
+                        .foregroundStyle(.secondary)
+                        .help("防休眠已开启")
+                }
+            }
+
+            if let mode = display.currentMode {
+                HStack(alignment: .firstTextBaseline, spacing: PanelGrid.columnGap) {
+                    Text(mode.logicalResolution)
+                        .font(PanelType.resolution).monospacedDigit()
+                        .lineLimit(1).minimumScaleFactor(0.85)
+                    Spacer(minLength: 0)
+                    Text(mode.isHiDPI ? "当前 · 2× HiDPI" : "当前 · 非 HiDPI")
+                        .font(PanelType.detail)
+                        .foregroundStyle(PanelType.detailInk)
+                        .fixedSize()
+                    Text(mode.presentationRefresh)
+                        .font(PanelType.detail).monospacedDigit()
+                        .foregroundStyle(PanelType.detailInk)
+                        .fixedSize()
+                    Color.clear.frame(width: PanelGrid.markWidth, height: 0)
+                }
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("当前分辨率 \(mode.logicalResolution)，\(mode.isHiDPI ? "2× HiDPI" : "非 HiDPI")，\(mode.presentationRefresh)，渲染尺寸 \(mode.backingResolution)")
+                .help("渲染尺寸 \(mode.backingResolution)")
+            } else {
+                Text("无法读取当前分辨率").font(PanelType.reading).foregroundStyle(.secondary)
+            }
+        }
+        .padding(.horizontal, PanelGrid.rowInset)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    @ViewBuilder private var pageBody: some View {
+        if viewModel.selectedSection == .controls {
+            ControlsPane(viewModel: viewModel)
+        } else if let display = selectedDisplay {
+            VStack(alignment: .leading, spacing: 5) {
+                if display.modes.isEmpty {
+                    Text("当前没有可选的 HiDPI 分辨率")
+                        .font(PanelType.reading).foregroundStyle(.secondary).padding(.vertical, 6)
+                } else {
+                    SectionLabel(title: viewModel.selectedSection == .displays ? "快捷分辨率" : "2× HiDPI 分辨率")
+                        .padding(.leading, PanelGrid.rowInset)
+                        .accessibilityAddTraits(.isHeader)
+                    let modes = viewModel.selectedSection == .displays ? display.featuredModes : display.modes
+                    ForEach(modes) { mode in
+                        ModeRow(
+                            mode: mode,
+                            isSelected: display.currentMode?.matches(mode) == true,
+                            showsRefreshRate: display.modes.contains {
+                                $0.width == mode.width && $0.height == mode.height && $0.id != mode.id
+                            },
+                            isBusy: viewModel.activeModeID == mode.id,
+                            isDisabled: viewModel.activeModeID != nil || display.currentMode == nil,
+                            action: { viewModel.selectMode(mode) }
+                        )
+                    }
+                }
+            }
+        } else {
+            EmptyStateView(
+                icon: "display.trianglebadge.exclamationmark",
+                title: "未检测到显示器",
+                actionTitle: "重新检测",
+                action: viewModel.refresh
+            )
+        }
+    }
+
+    private func feedbackBanner(_ feedback: AppFeedback, dismiss: @escaping () -> Void) -> some View {
+        FeedbackView(feedback: feedback, onAction: viewModel.performFeedbackAction, onDismiss: dismiss)
+            .padding(.horizontal, PanelGrid.edge)
+            .padding(.bottom, 42)
+    }
+
+    private var footer: some View {
+        VStack(spacing: 0) {
+            PanelDivider().padding(.horizontal, 14)
+            if viewModel.selectedSection == .displays {
+                HStack(spacing: 8) {
+                    routeButton("全部模式", icon: "list.bullet", section: .allModes, focus: .allModes)
+                        .disabled(selectedDisplay?.modes.isEmpty != false)
+                    routeButton("系统工具", icon: "gearshape", section: .controls, focus: .tools)
+                }
+                .padding(.horizontal, 14)
+                .padding(.top, 6)
+                .padding(.bottom, 10)
+            } else {
+                FooterView(viewModel: viewModel)
+            }
+        }
+    }
+
+    private func routeButton(_ title: String, icon: String, section: AppSection, focus: NavigationFocus) -> some View {
+        Button {
+            returnFocus = focus
+            viewModel.selectedSection = section
+        } label: {
+            HStack(spacing: 6) {
+                PanelGlyph(icon, role: .utility).foregroundStyle(.secondary)
+                Text(title).font(PanelType.action)
+                Spacer(minLength: 0)
+                PanelGlyph("chevron.right", role: .utility).foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 6)
+            .frame(maxWidth: .infinity, minHeight: 28)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.borderless)
+        .focused($navigationFocus, equals: focus)
     }
 }
 
-private struct HeaderView: View {
-    @ObservedObject var viewModel: AppViewModel
-
-    var body: some View {
-        HStack(spacing: 7) {
-            PanelGlyph("display.2", role: .utility).foregroundStyle(.secondary)
-            Text("HiDPI Quick").font(.subheadline.weight(.semibold)).foregroundStyle(.secondary)
-            Spacer()
-            if viewModel.controls.keepAwake {
-                PanelGlyph("cup.and.saucer", role: .utility, label: "防休眠已开启")
-                    .foregroundStyle(.secondary)
-                    .help("防休眠已开启")
-            }
-        }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 8)
+private extension DisplayMode {
+    var presentationRefresh: String {
+        guard refreshRate > 0 else { return "自动刷新率" }
+        return "\(refreshRate.formatted(.number.precision(.fractionLength(0...2)))) Hz"
     }
 }
 
@@ -92,10 +424,16 @@ private struct PanelDivider: View {
 
 private struct PanelGlyph: View {
     enum Role {
-        case utility, feature
+        case utility, feature, brand
 
-        var size: CGFloat { self == .utility ? 12 : 14 }
-        var slot: CGFloat { self == .utility ? 16 : 24 }
+        var size: CGFloat { self == .feature ? 14 : 12 }
+        var slot: CGFloat {
+            switch self {
+            case .utility: 16
+            case .feature: 24
+            case .brand: 20
+            }
+        }
     }
 
     let name: String
@@ -118,143 +456,27 @@ private struct PanelGlyph: View {
     }
 }
 
-private struct DisplaysPane: View {
-    @ObservedObject var viewModel: AppViewModel
-    @Binding var selectedDisplayID: DisplaySnapshot.ID?
-
-    private var selectedDisplay: DisplaySnapshot? {
-        viewModel.displays.first { $0.id == selectedDisplayID } ??
-            viewModel.primaryDisplay ?? viewModel.displays.first
-    }
-
+/// A monitor crossed out, distinct from the crescent used for appearance.
+private struct DisplayOffGlyph: View {
     var body: some View {
-        if let display = selectedDisplay {
-            ScrollView(.vertical, showsIndicators: false) {
-                VStack(alignment: .leading, spacing: 8) {
-                    if viewModel.displays.count > 1 {
-                        Picker("显示器", selection: Binding(
-                            get: { selectedDisplay?.id ?? display.id },
-                            set: { selectedDisplayID = $0 }
-                        )) {
-                            ForEach(viewModel.displays) { item in
-                                Text(item.name).tag(item.id)
-                            }
-                        }
-                        .pickerStyle(.menu)
-                        .controlSize(.small)
-                    }
-                    DisplaySection(
-                        display: display,
-                        showName: viewModel.displays.count == 1,
-                        activeModeID: viewModel.activeModeID,
-                        onSelect: viewModel.selectMode
-                    )
-                    .id(display.id)
-                }
-                .padding(.horizontal, 14)
-                .padding(.bottom, 8)
-            }
-        } else {
-            EmptyStateView(
-                icon: "display.trianglebadge.exclamationmark",
-                title: "未检测到显示器",
-                actionTitle: "重新检测",
-                action: viewModel.refresh
-            )
+        Path { path in
+            // Break the outline where the slash crosses rather than drawing on top of it.
+            path.move(to: CGPoint(x: 7, y: 3))
+            path.addLine(to: CGPoint(x: 14, y: 3))
+            path.addQuadCurve(to: CGPoint(x: 15.5, y: 4.5), control: CGPoint(x: 15.5, y: 3))
+            path.addLine(to: CGPoint(x: 15.5, y: 11))
+            path.move(to: CGPoint(x: 1.5, y: 6))
+            path.addLine(to: CGPoint(x: 1.5, y: 10.5))
+            path.addQuadCurve(to: CGPoint(x: 3, y: 12), control: CGPoint(x: 1.5, y: 12))
+            path.addLine(to: CGPoint(x: 10, y: 12))
+            path.move(to: CGPoint(x: 8, y: 12))
+            path.addLine(to: CGPoint(x: 8, y: 14.5))
+            path.move(to: CGPoint(x: 5.5, y: 14.5))
+            path.addLine(to: CGPoint(x: 10.5, y: 14.5))
+            path.move(to: CGPoint(x: 2, y: 1.5))
+            path.addLine(to: CGPoint(x: 15, y: 14.5))
         }
-    }
-}
-
-private struct DisplaySection: View {
-    let display: DisplaySnapshot
-    let showName: Bool
-    let activeModeID: String?
-    let onSelect: (DisplayMode) -> Void
-    @State private var showsAllModes = false
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(alignment: .center, spacing: 9) {
-                PanelGlyph(display.isBuiltin ? "laptopcomputer" : "display")
-                    .foregroundStyle(.secondary)
-                VStack(alignment: .leading, spacing: 3) {
-                    if showName {
-                        Text(display.name)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                            .help(display.name)
-                    }
-                    if let mode = display.currentMode {
-                        Text(mode.logicalResolution)
-                            .font(.headline)
-                            .monospacedDigit()
-                        Text("渲染尺寸 \(mode.backingResolution)")
-                            .font(.caption)
-                            .monospacedDigit()
-                            .foregroundStyle(.secondary)
-                    } else {
-                        Text("无法读取分辨率").font(.callout)
-                    }
-                }
-                Spacer(minLength: 6)
-                if let mode = display.currentMode {
-                    VStack(alignment: .trailing, spacing: 3) {
-                        Text(mode.isHiDPI ? "2× HiDPI" : "非 HiDPI")
-                            .font(.caption.weight(.semibold))
-                        Text(mode.refreshRate > 0 ? mode.refreshRateText : "自动刷新率")
-                            .font(.caption)
-                            .monospacedDigit()
-                    }
-                    .foregroundStyle(.secondary)
-                }
-            }
-            .padding(.vertical, 6)
-            .accessibilityElement(children: .combine)
-            .accessibilityLabel(currentStatusLabel)
-
-            PanelDivider().padding(.vertical, 3)
-
-            if display.modes.isEmpty {
-                Text("当前没有可选的 HiDPI 分辨率")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .padding(.vertical, 6)
-            } else {
-                SectionLabel(title: "2× HiDPI 分辨率")
-                modeRows(display.featuredModes)
-                if !display.additionalModes.isEmpty {
-                    DisclosureGroup("其他 HiDPI 模式（\(display.additionalModes.count)）", isExpanded: $showsAllModes) {
-                        modeRows(display.additionalModes)
-                            .padding(.top, 4)
-                    }
-                    .font(.callout)
-                }
-            }
-        }
-    }
-
-    private var currentStatusLabel: String {
-        guard let mode = display.currentMode else { return "\(display.name)，无法读取当前分辨率" }
-        let scale = mode.isHiDPI ? "2× HiDPI" : "非 HiDPI"
-        return "\(display.name)，当前 \(mode.logicalResolution)，\(scale)，渲染尺寸 \(mode.backingResolution)，\(mode.refreshRateText)"
-    }
-
-    private func modeRows(_ modes: [DisplayMode]) -> some View {
-        VStack(spacing: 2) {
-            ForEach(modes) { mode in
-                ModeRow(
-                    mode: mode,
-                    isSelected: display.currentMode?.matches(mode) == true,
-                    showsRefreshRate: display.modes.contains {
-                        $0.width == mode.width && $0.height == mode.height && $0.id != mode.id
-                    },
-                    isBusy: activeModeID == mode.id,
-                    isDisabled: activeModeID != nil || display.currentMode == nil,
-                    action: { onSelect(mode) }
-                )
-            }
-        }
+        .stroke(style: StrokeStyle(lineWidth: 1.3, lineCap: .round, lineJoin: .round))
     }
 }
 
@@ -269,14 +491,14 @@ private struct ModeRow: View {
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 8) {
+            HStack(alignment: .firstTextBaseline, spacing: PanelGrid.columnGap) {
                 Text(mode.logicalResolution)
-                    .font(.callout.weight(isSelected ? .semibold : .regular))
+                    .font(isSelected ? PanelType.selected : PanelType.reading)
                     .monospacedDigit()
                 Spacer(minLength: 6)
                 Text(showsRefreshRate ? (mode.refreshRate > 0 ? compactRefresh : "自动") : "")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(PanelType.detail)
+                    .foregroundStyle(PanelType.detailInk)
                     .monospacedDigit()
                     .frame(width: 62, alignment: .trailing)
                     .accessibilityHidden(true)
@@ -289,16 +511,17 @@ private struct ModeRow: View {
                             .foregroundStyle(Color.accentColor)
                     }
                 }
-                .frame(width: 16, height: 18)
+                .frame(width: PanelGrid.markWidth, height: 18)
+                .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 4 }
                 .accessibilityHidden(true)
             }
-            .padding(.horizontal, 8)
+            .padding(.horizontal, PanelGrid.rowInset)
             .frame(maxWidth: .infinity, minHeight: 30, alignment: .leading)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .background(
-            isSelected ? Color.primary.opacity(0.055) :
+            isSelected ? Color.primary.opacity(0.045) :
                 (isHovered && !isDisabled ? Color.primary.opacity(0.06) : Color.clear),
             in: RoundedRectangle(cornerRadius: 5)
         )
@@ -311,95 +534,117 @@ private struct ModeRow: View {
     }
 
     private var compactRefresh: String {
-        let value = mode.refreshRate.formatted(.number.precision(.fractionLength(0...2)))
-        return "\(value) Hz"
+        mode.presentationRefresh
     }
 }
 
 private struct ControlsPane: View {
     @ObservedObject var viewModel: AppViewModel
+    private let textInset: CGFloat = 12
 
     var body: some View {
-        ScrollView(.vertical, showsIndicators: false) {
-            VStack(alignment: .leading, spacing: 6) {
-                SectionLabel(title: "系统开关")
+        VStack(alignment: .leading, spacing: 6) {
+            toolSectionLabel("系统开关")
 
-                VStack(spacing: 0) {
-                    ToggleControlRow(
-                        icon: "cup.and.saucer.fill",
-                        title: "防休眠",
-                        subtitle: viewModel.controls.keepAwake ? "已启用，退出 App 时自动关闭" : "阻止系统休眠和自动屏保",
-                        isOn: binding(viewModel.controls.keepAwake, action: viewModel.setKeepAwake),
-                        isBusy: viewModel.activeControl == .keepAwake,
-                        isInteractionDisabled: viewModel.activeControl != nil
-                    )
-                    rowDivider
-                    ToggleControlRow(
-                        icon: "moon.fill",
-                        title: "深色模式",
-                        subtitle: viewModel.controls.darkMode ? "当前使用深色外观" : "当前使用浅色外观",
-                        isOn: binding(viewModel.controls.darkMode, action: viewModel.setDarkMode),
-                        isBusy: viewModel.activeControl == .darkMode,
-                        isInteractionDisabled: viewModel.activeControl != nil
-                    )
-                    rowDivider
-                    ToggleControlRow(
-                        icon: "desktopcomputer",
-                        title: "隐藏桌面图标",
-                        subtitle: viewModel.controls.desktopIconsHidden ? "桌面图标已隐藏" : "桌面图标正常显示",
-                        isOn: binding(viewModel.controls.desktopIconsHidden, action: viewModel.setDesktopIconsHidden),
-                        isBusy: viewModel.activeControl == .desktopIcons,
-                        isInteractionDisabled: viewModel.activeControl != nil
-                    )
-                    rowDivider
-                    ToggleControlRow(
-                        icon: "eye.fill",
-                        title: "显示隐藏文件",
-                        subtitle: viewModel.controls.hiddenFilesVisible ? "Finder 正在显示隐藏项目" : "Finder 当前不显示隐藏文件",
-                        isOn: binding(viewModel.controls.hiddenFilesVisible, action: viewModel.setHiddenFilesVisible),
-                        isBusy: viewModel.activeControl == .hiddenFiles,
-                        isInteractionDisabled: viewModel.activeControl != nil
-                    )
-                    rowDivider
-                    ToggleControlRow(
-                        icon: "dock.rectangle",
-                        title: "Dock 自动隐藏",
-                        subtitle: viewModel.controls.dockAutoHide ? "移到屏幕边缘时显示 Dock" : "Dock 保持显示",
-                        isOn: binding(viewModel.controls.dockAutoHide, action: viewModel.setDockAutoHide),
-                        isBusy: viewModel.activeControl == .dockAutoHide,
-                        isInteractionDisabled: viewModel.activeControl != nil
-                    )
-                }
-                .controlGroupStyle()
-
-                SectionLabel(title: "快捷动作")
-
-                VStack(spacing: 0) {
-                    ActionRow(
-                        icon: "play.rectangle.fill",
-                        title: "启动屏幕保护程序",
-                        isBusy: viewModel.activeControl == .screenSaver,
-                        isInteractionDisabled: viewModel.activeControl != nil,
-                        action: viewModel.startScreenSaver
-                    )
-                    rowDivider
-                    ActionRow(
-                        icon: "moon.zzz.fill",
-                        title: "立即关闭显示器",
-                        isBusy: viewModel.activeControl == .displaySleep,
-                        isInteractionDisabled: viewModel.activeControl != nil,
-                        action: viewModel.sleepDisplays
-                    )
-                }
-                .controlGroupStyle()
+            VStack(spacing: 0) {
+                ToggleControlRow(
+                    title: "防休眠",
+                    subtitle: viewModel.controls.keepAwake ? "退出 App 时自动关闭" : "阻止系统休眠和自动屏保",
+                    isOn: binding(viewModel.controls.keepAwake, action: viewModel.setKeepAwake),
+                    isBusy: viewModel.activeControl == .keepAwake,
+                    hasSucceeded: succeeded(.keepAwake),
+                    isInteractionDisabled: viewModel.activeControl != nil
+                )
+                rowDivider
+                ToggleControlRow(
+                    title: "深色模式",
+                    subtitle: viewModel.controls.darkMode ? "当前使用深色外观" : "当前使用浅色外观",
+                    isOn: binding(viewModel.controls.darkMode, action: viewModel.setDarkMode),
+                    isBusy: viewModel.activeControl == .darkMode,
+                    hasSucceeded: succeeded(.darkMode),
+                    isInteractionDisabled: viewModel.activeControl != nil
+                )
+                rowDivider
+                ToggleControlRow(
+                    title: "隐藏桌面图标",
+                    subtitle: viewModel.controls.desktopIconsHidden ? "桌面图标已隐藏" : "桌面图标正常显示",
+                    isOn: binding(viewModel.controls.desktopIconsHidden, action: viewModel.setDesktopIconsHidden),
+                    isBusy: viewModel.activeControl == .desktopIcons,
+                    hasSucceeded: succeeded(.desktopIcons),
+                    isInteractionDisabled: viewModel.activeControl != nil
+                )
+                rowDivider
+                ToggleControlRow(
+                    title: "显示隐藏文件",
+                    subtitle: viewModel.controls.hiddenFilesVisible ? "Finder 正在显示隐藏项目" : "Finder 当前不显示隐藏文件",
+                    isOn: binding(viewModel.controls.hiddenFilesVisible, action: viewModel.setHiddenFilesVisible),
+                    isBusy: viewModel.activeControl == .hiddenFiles,
+                    hasSucceeded: succeeded(.hiddenFiles),
+                    isInteractionDisabled: viewModel.activeControl != nil
+                )
+                rowDivider
+                ToggleControlRow(
+                    title: "Dock 自动隐藏",
+                    subtitle: viewModel.controls.dockAutoHide ? "移到屏幕边缘时显示 Dock" : "Dock 保持显示",
+                    isOn: binding(viewModel.controls.dockAutoHide, action: viewModel.setDockAutoHide),
+                    isBusy: viewModel.activeControl == .dockAutoHide,
+                    hasSucceeded: succeeded(.dockAutoHide),
+                    isInteractionDisabled: viewModel.activeControl != nil
+                )
+                rowDivider
+                ToggleControlRow(
+                    title: "登录时启动",
+                    subtitle: viewModel.controls.loginLaunch.subtitle,
+                    isOn: binding(viewModel.controls.loginLaunch.isRequested, action: viewModel.setLaunchAtLogin),
+                    isBusy: viewModel.activeControl == .launchAtLogin,
+                    hasSucceeded: succeeded(.launchAtLogin),
+                    isInteractionDisabled: viewModel.activeControl != nil || viewModel.controls.loginLaunch == .unavailable,
+                    subtitleAction: viewModel.controls.loginLaunch == .pendingApproval
+                        ? { viewModel.performFeedbackAction(.openLoginItems) } : nil
+                )
             }
-            .padding(.horizontal, 14)
-            .padding(.bottom, 14)
+            .controlGroupStyle()
+
+            toolSectionLabel("快捷动作")
+
+            VStack(spacing: 0) {
+                ActionRow(
+                    icon: .saver,
+                    title: "启动屏幕保护程序",
+                    isBusy: viewModel.activeControl == .screenSaver,
+                    hasSucceeded: succeeded(.screenSaver),
+                    isInteractionDisabled: viewModel.activeControl != nil,
+                    action: viewModel.startScreenSaver
+                )
+                rowDivider
+                ActionRow(
+                    icon: .displayOff,
+                    title: "立即关闭显示器",
+                    isBusy: viewModel.activeControl == .displaySleep,
+                    hasSucceeded: succeeded(.displaySleep),
+                    isInteractionDisabled: viewModel.activeControl != nil,
+                    action: viewModel.sleepDisplays
+                )
+            }
+            .controlGroupStyle()
         }
     }
 
+    private func succeeded(_ control: ControlIdentifier) -> Bool {
+        viewModel.controlFeedback?.control == control && viewModel.controlFeedback?.feedback.tone == .success
+    }
+
+    private func toolSectionLabel(_ title: String) -> some View {
+        Text(title)
+            .font(PanelType.label)
+            .foregroundStyle(PanelType.detailInk)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.leading, textInset)
+            .accessibilityAddTraits(.isHeader)
+    }
+
     private var rowDivider: some View {
-        PanelDivider().padding(.leading, 46)
+        PanelDivider().padding(.horizontal, textInset)
     }
 
     private func binding(
@@ -417,34 +662,59 @@ private struct ControlsPane: View {
     }
 }
 
+private struct ControlRowStatus: View {
+    let isBusy: Bool
+    let hasSucceeded: Bool
+
+    var body: some View {
+        ZStack {
+            Color.clear
+            if isBusy {
+                ProgressView().controlSize(.small)
+            } else if hasSucceeded {
+                Image(systemName: "checkmark.circle.fill")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(Color.accentColor)
+            }
+        }
+        .frame(width: 14, height: 14)
+        .accessibilityHidden(true) // Completion is announced once by the view model.
+    }
+}
+
 private struct ToggleControlRow: View {
-    let icon: String
     let title: String
     let subtitle: String
     @Binding var isOn: Bool
     let isBusy: Bool
+    let hasSucceeded: Bool
     let isInteractionDisabled: Bool
+    var subtitleAction: (() -> Void)? = nil
 
     var body: some View {
         HStack(spacing: 10) {
-            PanelGlyph(icon).foregroundStyle(.secondary)
-
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
-                    .font(.subheadline.weight(.medium))
-                Text(subtitle)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
+                    .font(PanelType.action)
+                    .accessibilityHidden(true)
+                if let subtitleAction, !isBusy {
+                    Button(subtitle, action: subtitleAction)
+                        .buttonStyle(.link)
+                        .font(PanelType.detail)
+                        .lineLimit(1)
+                        .accessibilityLabel("批准 HiDPI Quick 登录时启动")
+                } else {
+                    Text(isBusy ? "正在应用…" : (hasSucceeded ? (isOn ? "已开启" : "已关闭") : subtitle))
+                        .font(PanelType.detail)
+                        .foregroundStyle(PanelType.detailInk)
+                        .lineLimit(1)
+                        .accessibilityHidden(true)
+                }
             }
 
             Spacer(minLength: 8)
 
-            ProgressView()
-                .controlSize(.small)
-                .frame(width: 14, height: 14)
-                .opacity(isBusy ? 1 : 0)
-                .accessibilityHidden(!isBusy)
+            ControlRowStatus(isBusy: isBusy, hasSucceeded: hasSucceeded)
 
             Toggle("", isOn: $isOn)
                 .labelsHidden()
@@ -452,39 +722,73 @@ private struct ToggleControlRow: View {
                 .controlSize(.small)
                 .disabled(isInteractionDisabled)
                 .accessibilityLabel(title)
-                .accessibilityHint(isBusy ? "正在应用设置" : "")
+                .accessibilityHint(isBusy ? "正在应用设置" : subtitle)
         }
         .padding(.horizontal, 12)
-        .frame(minHeight: 40)
+        .frame(minHeight: 39)
     }
 }
 
 private struct ActionRow: View {
-    let icon: String
+    enum Icon { case saver, displayOff }
+
+    let icon: Icon
     let title: String
     let isBusy: Bool
+    let hasSucceeded: Bool
     let isInteractionDisabled: Bool
     let action: () -> Void
+
+    @Environment(\.isEnabled) private var isEnabled
+    @State private var isHovered = false
+    @FocusState private var isFocused: Bool
+
+    private var canInteract: Bool { isEnabled && !isInteractionDisabled }
 
     var body: some View {
         Button(action: action) {
             HStack(spacing: 10) {
-                PanelGlyph(icon).foregroundStyle(.secondary)
                 Text(title)
-                    .font(.subheadline.weight(.medium))
+                    .font(PanelType.action)
                 Spacer()
 
-                ProgressView()
-                    .controlSize(.small)
-                    .frame(width: 14, height: 14)
-                    .opacity(isBusy ? 1 : 0)
-                    .accessibilityHidden(!isBusy)
+                Group {
+                    if isBusy || hasSucceeded {
+                        ControlRowStatus(isBusy: isBusy, hasSucceeded: hasSucceeded)
+                    } else if icon == .saver {
+                        Image(systemName: "play.rectangle")
+                            .font(.system(size: 13, weight: .medium))
+                    } else {
+                        DisplayOffGlyph()
+                            .frame(width: 17, height: 16)
+                    }
+                }
+                .foregroundStyle(.secondary)
+                .frame(width: 20, height: 20)
+                .accessibilityHidden(true)
             }
             .padding(.horizontal, 12)
-            .frame(minHeight: 34)
+            .frame(minHeight: 31)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .focused($isFocused)
+        .background {
+            RoundedRectangle(cornerRadius: 6)
+                .fill(canInteract && isHovered ? Color.primary.opacity(0.06) : .clear)
+                .padding(.horizontal, 4)
+                .allowsHitTesting(false)
+        }
+        .overlay {
+            if canInteract && isFocused {
+                RoundedRectangle(cornerRadius: 6)
+                    .strokeBorder(Color.accentColor, lineWidth: 1.5)
+                    .padding(.horizontal, 4)
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
+            }
+        }
+        .onHover { isHovered = $0 }
         .disabled(isInteractionDisabled)
         .accessibilityLabel(title)
     }
@@ -495,10 +799,9 @@ private struct SectionLabel: View {
 
     var body: some View {
         Text(title)
-            .font(.caption.weight(.semibold))
-            .foregroundStyle(.secondary)
+            .font(PanelType.label)
+            .foregroundStyle(PanelType.detailInk)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 2)
     }
 }
 
@@ -518,43 +821,55 @@ private extension View {
 private struct FeedbackView: View {
     let feedback: AppFeedback
     let onAction: (FeedbackAction) -> Void
+    let onDismiss: () -> Void
 
     var body: some View {
         let isSuccess = feedback.tone == .success
+        HStack(alignment: .top, spacing: 9) {
+            Image(systemName: isSuccess ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                .font(.system(size: 13))
+                .foregroundStyle(isSuccess ? Color.accentColor : Color.orange)
+                .padding(.top, 1)
+                .accessibilityHidden(true)
 
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(alignment: .top, spacing: 8) {
-                Image(systemName: isSuccess ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
-                    .padding(.top, 1)
-                Text(feedback.message)
-                    .font(.caption)
-                    .fixedSize(horizontal: false, vertical: true)
-                Spacer(minLength: 0)
-            }
-
-            if let action = feedback.action {
-                Button(action.title) {
-                    onAction(action)
+            VStack(alignment: .leading, spacing: 5) {
+                if !isSuccess {
+                    Text(feedback.action == .openLoginItems ? "等待系统批准" : "操作未完成")
+                        .font(PanelType.selected)
                 }
-                .buttonStyle(.link)
-                .font(.caption.weight(.medium))
-                .accessibilityHint("打开对应的系统设置页面")
+                Text(feedback.message)
+                    .font(PanelType.detail)
+                    .foregroundStyle(PanelType.detailInk)
+                    .lineLimit(3)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .help(feedback.message)
+                if let action = feedback.action {
+                    Button(action.title) { onAction(action) }
+                        .buttonStyle(.link)
+                        .font(PanelType.action)
+                }
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            Button(action: onDismiss) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(PanelType.detailInk)
+                    .frame(width: 24, height: 24)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.borderless)
+            .accessibilityLabel("关闭提示")
+            .help("关闭提示")
         }
-        .foregroundStyle(isSuccess ? Color.green : Color.orange)
-        .padding(.horizontal, 10)
-        .padding(.vertical, 8)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background {
-            RoundedRectangle(cornerRadius: 8)
-                .fill(Color(nsColor: .windowBackgroundColor))
-            RoundedRectangle(cornerRadius: 8)
-                .fill((isSuccess ? Color.green : Color.orange).opacity(0.10))
-        }
+        .padding(10)
+        .background(Color(nsColor: .windowBackgroundColor), in: RoundedRectangle(cornerRadius: 9))
         .overlay {
-            RoundedRectangle(cornerRadius: 8)
-                .strokeBorder((isSuccess ? Color.green : Color.orange).opacity(0.16))
+            RoundedRectangle(cornerRadius: 9)
+                .strokeBorder(Color(nsColor: .separatorColor), lineWidth: 0.5)
+                .allowsHitTesting(false)
         }
+        .shadow(color: .black.opacity(0.15), radius: 6, y: 2)
     }
 }
 
@@ -570,7 +885,7 @@ private struct EmptyStateView: View {
                 .font(.system(size: 24))
                 .foregroundStyle(.secondary)
             Text(title)
-                .font(.subheadline.weight(.medium))
+                .font(PanelType.action)
             Button(actionTitle, action: action)
                 .controlSize(.small)
         }
@@ -585,12 +900,6 @@ private struct FooterView: View {
     var body: some View {
         HStack(spacing: 6) {
             FooterButton(
-                icon: "display",
-                label: "打开显示器设置",
-                title: "显示器设置",
-                action: viewModel.openDisplaysSettings
-            )
-            FooterButton(
                 icon: "arrow.clockwise",
                 label: "刷新状态",
                 action: viewModel.refresh
@@ -599,8 +908,8 @@ private struct FooterView: View {
             Spacer()
 
             FooterButton(
-                icon: "power",
                 label: "退出 HiDPI Quick",
+                title: "退出",
                 action: { NSApp.terminate(nil) }
             )
         }
@@ -610,7 +919,7 @@ private struct FooterView: View {
 }
 
 private struct FooterButton: View {
-    let icon: String
+    var icon: String? = nil
     let label: String
     var title: String? = nil
     let action: () -> Void
@@ -618,11 +927,11 @@ private struct FooterButton: View {
     var body: some View {
         Button(action: action) {
             HStack(spacing: 5) {
-                PanelGlyph(icon, role: .utility)
+                if let icon { PanelGlyph(icon, role: .utility) }
                 if let title { Text(title) }
             }
-            .font(.caption.weight(.medium))
-            .foregroundStyle(Color.primary.opacity(0.68))
+            .font(PanelType.action)
+            .foregroundStyle(.primary)
             .frame(minWidth: 28, minHeight: 24)
             .contentShape(Rectangle())
         }
