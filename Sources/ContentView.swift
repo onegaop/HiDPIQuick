@@ -4,13 +4,12 @@ import SwiftUI
 struct ContentView: View {
     static let panelSize = NSSize(width: 336, height: 450)
     @ObservedObject var viewModel: AppViewModel
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @State private var selectedDisplayID: DisplaySnapshot.ID?
 
     var body: some View {
         VStack(spacing: 0) {
             HeaderView(viewModel: viewModel)
-
-            Divider()
 
             Picker("功能", selection: $viewModel.selectedSection) {
                 ForEach(AppSection.allCases) { section in
@@ -20,7 +19,8 @@ struct ContentView: View {
             .pickerStyle(.segmented)
             .labelsHidden()
             .padding(.horizontal, 14)
-            .padding(.vertical, 8)
+            .padding(.top, 1)
+            .padding(.bottom, 10)
 
             Group {
                 switch viewModel.selectedSection {
@@ -37,11 +37,17 @@ struct ContentView: View {
                     .padding(.vertical, 6)
             }
 
-            Divider()
+            PanelDivider().padding(.horizontal, 14)
             FooterView(viewModel: viewModel)
         }
         .frame(width: Self.panelSize.width, height: Self.panelSize.height)
-        .background(Color(nsColor: .windowBackgroundColor))
+        .background {
+            if reduceTransparency {
+                Color(nsColor: .windowBackgroundColor)
+            } else {
+                Rectangle().fill(.regularMaterial)
+            }
+        }
     }
 }
 
@@ -51,9 +57,10 @@ private struct HeaderView: View {
     var body: some View {
         HStack(spacing: 7) {
             Image(systemName: "display.2")
+                .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(.secondary)
                 .accessibilityHidden(true)
-            Text("HiDPI Quick").font(.headline)
+            Text("HiDPI Quick").font(.subheadline.weight(.semibold)).foregroundStyle(.secondary)
             Spacer()
             if viewModel.controls.keepAwake {
                 Label("防休眠已开启", systemImage: "cup.and.saucer")
@@ -63,7 +70,16 @@ private struct HeaderView: View {
             }
         }
         .padding(.horizontal, 14)
-        .padding(.vertical, 10)
+        .padding(.vertical, 8)
+    }
+}
+
+private struct PanelDivider: View {
+    var body: some View {
+        Rectangle()
+            .fill(Color(nsColor: .separatorColor).opacity(0.6))
+            .frame(height: 1)
+            .accessibilityHidden(true)
     }
 }
 
@@ -123,35 +139,49 @@ private struct DisplaySection: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            if showName {
-                Label(display.name, systemImage: display.isBuiltin ? "laptopcomputer" : "display")
-                    .font(.subheadline.weight(.semibold))
-                    .lineLimit(1)
-                    .help(display.name)
-            }
-            HStack(spacing: 6) {
-                Text("当前").foregroundStyle(.secondary)
-                if let mode = display.currentMode {
-                    Text(mode.logicalResolution).monospacedDigit()
-                    Text(mode.isHiDPI ? "2× HiDPI" : "非 HiDPI").foregroundStyle(.secondary)
-                    Spacer(minLength: 4)
-                    if mode.refreshRate > 0 {
-                        Text(mode.refreshRateText).foregroundStyle(.secondary)
+            HStack(alignment: .center, spacing: 9) {
+                Image(systemName: display.isBuiltin ? "laptopcomputer" : "display")
+                    .font(.system(size: 15, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 24)
+                    .accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 3) {
+                    if showName {
+                        Text(display.name)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .help(display.name)
                     }
-                } else {
-                    Text("无法读取分辨率").foregroundStyle(.secondary)
+                    if let mode = display.currentMode {
+                        Text(mode.logicalResolution)
+                            .font(.headline)
+                            .monospacedDigit()
+                        Text("渲染尺寸 \(mode.backingResolution)")
+                            .font(.caption)
+                            .monospacedDigit()
+                            .foregroundStyle(.secondary)
+                    } else {
+                        Text("无法读取分辨率").font(.callout)
+                    }
+                }
+                Spacer(minLength: 6)
+                if let mode = display.currentMode {
+                    VStack(alignment: .trailing, spacing: 3) {
+                        Text(mode.isHiDPI ? "2× HiDPI" : "非 HiDPI")
+                            .font(.caption.weight(.semibold))
+                        Text(mode.refreshRate > 0 ? mode.refreshRateText : "自动刷新率")
+                            .font(.caption)
+                            .monospacedDigit()
+                    }
+                    .foregroundStyle(.secondary)
                 }
             }
-            .font(.callout)
+            .padding(.vertical, 6)
             .accessibilityElement(children: .combine)
-            if let mode = display.currentMode {
-                Text("渲染尺寸 \(mode.backingResolution)")
-                    .font(.caption)
-                    .monospacedDigit()
-                    .foregroundStyle(.secondary)
-            }
+            .accessibilityLabel(currentStatusLabel)
 
-            Divider().padding(.vertical, 2)
+            PanelDivider().padding(.vertical, 3)
 
             if display.modes.isEmpty {
                 Text("当前没有可选的 HiDPI 分辨率")
@@ -170,6 +200,12 @@ private struct DisplaySection: View {
                 }
             }
         }
+    }
+
+    private var currentStatusLabel: String {
+        guard let mode = display.currentMode else { return "\(display.name)，无法读取当前分辨率" }
+        let scale = mode.isHiDPI ? "2× HiDPI" : "非 HiDPI"
+        return "\(display.name)，当前 \(mode.logicalResolution)，\(scale)，渲染尺寸 \(mode.backingResolution)，\(mode.refreshRateText)"
     }
 
     private func modeRows(_ modes: [DisplayMode]) -> some View {
@@ -230,14 +266,14 @@ private struct ModeRow: View {
         }
         .buttonStyle(.plain)
         .background(
-            isSelected ? Color.accentColor.opacity(0.10) :
+            isSelected ? Color.primary.opacity(0.055) :
                 (isHovered && !isDisabled ? Color.primary.opacity(0.06) : Color.clear),
             in: RoundedRectangle(cornerRadius: 5)
         )
         .onHover { isHovered = $0 }
         .disabled(isDisabled)
         .help("渲染 \(mode.backingResolution) · \(mode.refreshRateText)")
-        .accessibilityLabel("\(mode.logicalResolution)，HiDPI，\(mode.refreshRateText)")
+        .accessibilityLabel("\(mode.logicalResolution)，HiDPI，\(mode.refreshRate > 0 ? compactRefresh : mode.refreshRateText)")
         .accessibilityValue(isBusy ? "正在切换" : (isSelected ? "当前分辨率" : ""))
         .accessibilityHint(isSelected || isDisabled ? "" : "立即切换并关闭菜单")
     }
@@ -331,7 +367,7 @@ private struct ControlsPane: View {
     }
 
     private var rowDivider: some View {
-        Divider().padding(.leading, 42)
+        PanelDivider().padding(.leading, 36)
     }
 
     private func binding(
@@ -449,12 +485,7 @@ private struct SectionLabel: View {
 private struct ControlGroupModifier: ViewModifier {
     func body(content: Content) -> some View {
         content
-            .background(Color(nsColor: .controlBackgroundColor))
-            .clipShape(RoundedRectangle(cornerRadius: 8))
-            .overlay {
-                RoundedRectangle(cornerRadius: 8)
-                    .strokeBorder(Color(nsColor: .separatorColor).opacity(0.35))
-            }
+            .background(Color.primary.opacity(0.028), in: RoundedRectangle(cornerRadius: 8))
     }
 }
 
@@ -554,7 +585,7 @@ private struct FooterView: View {
             )
         }
         .padding(.horizontal, 12)
-        .padding(.vertical, 8)
+        .padding(.vertical, 7)
     }
 }
 
@@ -570,7 +601,8 @@ private struct FooterButton: View {
                 Image(systemName: icon)
                 if let title { Text(title) }
             }
-            .font(.callout)
+            .font(.caption.weight(.medium))
+            .foregroundStyle(Color.primary.opacity(0.68))
             .frame(minWidth: 28, minHeight: 24)
             .contentShape(Rectangle())
         }
