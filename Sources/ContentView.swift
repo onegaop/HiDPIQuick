@@ -253,7 +253,7 @@ private struct ControlsPane: View {
 
     var body: some View {
         ScrollView(.vertical, showsIndicators: false) {
-            VStack(alignment: .leading, spacing: 9) {
+            VStack(alignment: .leading, spacing: 6) {
                 SectionLabel(title: "系统开关")
 
                 VStack(spacing: 0) {
@@ -326,7 +326,7 @@ private struct ControlsPane: View {
                 .controlGroupStyle()
             }
             .padding(.horizontal, 14)
-            .padding(.bottom, 8)
+            .padding(.bottom, 14)
         }
     }
 
@@ -387,7 +387,7 @@ private struct ToggleControlRow: View {
                 .accessibilityHint(isBusy ? "正在应用设置" : "")
         }
         .padding(.horizontal, 12)
-        .frame(minHeight: 42)
+        .frame(minHeight: 40)
     }
 }
 
