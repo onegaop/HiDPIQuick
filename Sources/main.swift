@@ -19,14 +19,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             button.target = self
         }
 
-        let resize: (NSSize) -> Void = { [weak self] size in self?.panel.resize(to: size) }
         if #available(macOS 26.0, *) {
             panel.setContentViewController(
-                GlassPopoverController(viewModel: viewModel, viewport: viewport, onSizeChange: resize)
+                GlassPopoverController(viewModel: viewModel, viewport: viewport)
             )
         } else {
             let host = NSHostingController(
-                rootView: ContentView(viewModel: viewModel, viewport: viewport, onSizeChange: resize)
+                rootView: ContentView(viewModel: viewModel, viewport: viewport)
             )
             host.sizingOptions = []
             panel.setContentViewController(host)
@@ -90,9 +89,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func showPopover() {
         guard let button = statusItem.button, let window = button.window, let screen = window.screen else { return }
         let anchor = window.convertToScreen(button.convert(button.bounds, to: nil))
-        viewport.maximumHeight = min(450, panel.maximumHeight(anchor: anchor, visibleFrame: screen.visibleFrame))
         viewModel.refresh()
-        panel.show(anchor: anchor, visibleFrame: screen.visibleFrame, maximumHeight: viewport.maximumHeight)
+        panel.show(anchor: anchor, visibleFrame: screen.visibleFrame, viewport: viewport)
     }
 
     private func updateStatusItem() {

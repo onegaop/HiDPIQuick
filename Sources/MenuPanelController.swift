@@ -18,9 +18,6 @@ final class MenuPanelController {
     )
     private let outsideClickMonitor = PopoverOutsideClickMonitor()
     private var keyboardMonitor: Any?
-    private var panelSize = ContentView.panelSize
-    private var anchor: CGRect?
-    private var screenFrame: CGRect?
 
     var isShown: Bool { panel.isVisible }
 
@@ -43,14 +40,10 @@ final class MenuPanelController {
         controller.view.layer?.masksToBounds = true
     }
 
-    func maximumHeight(anchor: CGRect, visibleFrame: CGRect) -> CGFloat {
-        max(1, floor(anchor.minY - visibleFrame.minY - Self.edge - Self.gap))
-    }
-
-    func show(anchor: CGRect, visibleFrame: CGRect, maximumHeight: CGFloat) {
-        self.anchor = anchor
-        self.screenFrame = visibleFrame
-        resize(to: NSSize(width: panelSize.width, height: min(panelSize.height, maximumHeight)))
+    func show(anchor: CGRect, visibleFrame: CGRect, viewport: PanelViewport) {
+        let frame = Self.frame(size: ContentView.panelSize, anchor: anchor, visibleFrame: visibleFrame)
+        if viewport.size != frame.size { viewport.size = frame.size }
+        panel.setFrame(frame, display: false)
         panel.makeKeyAndOrderFront(nil)
         outsideClickMonitor.start { [weak self] in self?.close() }
         if keyboardMonitor == nil {
@@ -62,23 +55,11 @@ final class MenuPanelController {
         }
     }
 
-    func resize(to size: NSSize) {
-        guard size.height.isFinite, size.height > 0 else { return }
-        panelSize = size
-        guard let anchor, let screenFrame else { return }
-        let frame = Self.frame(size: size, anchor: anchor, visibleFrame: screenFrame)
-        guard panel.frame != frame else { return }
-        panel.setFrame(frame, display: panel.isVisible)
-        panel.invalidateShadow()
-    }
-
     func close() {
         outsideClickMonitor.stop()
         if let keyboardMonitor { NSEvent.removeMonitor(keyboardMonitor) }
         keyboardMonitor = nil
         panel.orderOut(nil)
-        anchor = nil
-        screenFrame = nil
     }
 
     static func frame(size: NSSize, anchor: CGRect, visibleFrame: CGRect) -> CGRect {

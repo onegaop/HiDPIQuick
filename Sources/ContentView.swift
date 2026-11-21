@@ -1,30 +1,10 @@
 import Cocoa
 import SwiftUI
 
-/// Height budget for the status item panel on its current display.
+/// A single window size is chosen before showing; route content never resizes it.
 @MainActor
 final class PanelViewport: ObservableObject {
-    @Published var maximumHeight: CGFloat = 450
-}
-
-private struct PanelHeights: PreferenceKey {
-    static let defaultValue: [Part: CGFloat] = [:]
-
-    enum Part: Hashable { case header, body, footer }
-
-    static func reduce(value: inout [Part: CGFloat], nextValue: () -> [Part: CGFloat]) {
-        value.merge(nextValue(), uniquingKeysWith: { _, latest in latest })
-    }
-}
-
-private extension View {
-    func measurePanelHeight(_ part: PanelHeights.Part) -> some View {
-        background {
-            GeometryReader { geometry in
-                Color.clear.preference(key: PanelHeights.self, value: [part: geometry.size.height])
-            }
-        }
-    }
+    @Published var size = NSSize(width: 312, height: 450)
 }
 
 private enum PanelGrid {
@@ -50,28 +30,23 @@ private enum PanelType {
 
 @MainActor
 struct ContentView: View {
-    static let panelSize = NSSize(width: 312, height: 312)
+    static let panelSize = NSSize(width: 312, height: 450)
     @ObservedObject var viewModel: AppViewModel
     var usesNativeGlass = false
     @ObservedObject var viewport: PanelViewport
-    var onSizeChange: ((NSSize) -> Void)?
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
-    @Environment(\.displayScale) private var displayScale
     @State private var selectedDisplayID: DisplaySnapshot.ID?
-    @State private var measuredHeight: CGFloat = 0
     @FocusState private var navigationFocus: NavigationFocus?
     @State private var returnFocus: NavigationFocus?
 
     init(
         viewModel: AppViewModel,
         usesNativeGlass: Bool = false,
-        viewport: PanelViewport? = nil,
-        onSizeChange: ((NSSize) -> Void)? = nil
+        viewport: PanelViewport? = nil
     ) {
         self.viewModel = viewModel
         self.usesNativeGlass = usesNativeGlass
         self.viewport = viewport ?? PanelViewport()
-        self.onSizeChange = onSizeChange
     }
 
     private enum NavigationFocus: Hashable { case allModes, tools, back }
@@ -81,44 +56,33 @@ struct ContentView: View {
             viewModel.primaryDisplay ?? viewModel.displays.first
     }
 
-    private var layoutHeight: CGFloat {
-        min(viewport.maximumHeight, measuredHeight > 0 ? measuredHeight : Self.panelSize.height)
-    }
-
     private var trailingContentInset: CGFloat {
-        // Legacy scrollers reserve their own space. Overlay rails share the viewport.
-        let usesOverlayScroller = showsScrollIndicators && NSScroller.preferredScrollerStyle == .overlay
-        return PanelGrid.edge + (usesOverlayScroller ? PanelGrid.modeScrollerClearance : 0)
-    }
-
-    private var showsScrollIndicators: Bool {
-        viewModel.selectedSection == .allModes ||
-            (viewModel.selectedSection == .controls && measuredHeight > viewport.maximumHeight)
+        // All routes can scroll on a short display. Keep overlay rails clear
+        // of the interactive rows when they appear.
+        PanelGrid.edge + (NSScroller.preferredScrollerStyle == .overlay
+            ? PanelGrid.modeScrollerClearance : 0)
     }
 
     var body: some View {
         VStack(spacing: 0) {
             header
                 .fixedSize(horizontal: false, vertical: true)
-                .measurePanelHeight(.header)
 
-            ScrollView(.vertical, showsIndicators: showsScrollIndicators) {
+            ScrollView(.vertical) {
                 pageBody
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.leading, PanelGrid.edge)
                     .padding(.trailing, trailingContentInset)
                     .padding(.top, 6)
                     .padding(.bottom, viewModel.selectedSection == .controls ? 9 : 14)
-                    .measurePanelHeight(.body)
             }
             .id(ScrollIdentity(section: viewModel.selectedSection, displayID: selectedDisplay?.id))
             .frame(maxHeight: .infinity)
 
             footer
                 .fixedSize(horizontal: false, vertical: true)
-                .measurePanelHeight(.footer)
         }
-        .frame(width: Self.panelSize.width, height: layoutHeight)
+        .frame(width: viewport.size.width, height: viewport.size.height)
         .background {
             if !usesNativeGlass {
                 if reduceTransparency {
@@ -135,16 +99,6 @@ struct ContentView: View {
             } else if let feedback = viewModel.feedback {
                 feedbackBanner(feedback, dismiss: viewModel.dismissFeedback)
             }
-        }
-        .onPreferenceChange(PanelHeights.self) { heights in
-            if heights.count == 3 {
-                let scale = max(displayScale, 1)
-                let height = ceil(heights.values.reduce(0, +) * scale) / scale
-                if height.isFinite && height > 0 { measuredHeight = height }
-            }
-        }
-        .onChange(of: layoutHeight) { height in
-            onSizeChange?(NSSize(width: Self.panelSize.width, height: height))
         }
         .onChange(of: viewModel.selectedSection) { section in
             // The target is part of the newly mounted route, not the departing view.
@@ -716,13 +670,14 @@ private struct ToggleControlRow: View {
                     Button(subtitle, action: subtitleAction)
                         .buttonStyle(.link)
                         .font(PanelType.detail)
-                        .lineLimit(1)
+                        .lineLimit(2)
                         .accessibilityLabel("批准 HiDPI Quick 登录时启动")
                 } else {
                     Text(isBusy ? "正在应用…" : (hasSucceeded ? (isOn ? "已开启" : "已关闭") : subtitle))
                         .font(PanelType.detail)
                         .foregroundStyle(PanelType.detailInk)
-                        .lineLimit(1)
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
                         .accessibilityHidden(true)
                 }
             }

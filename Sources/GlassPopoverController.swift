@@ -12,7 +12,6 @@ final class GlassPopoverController: NSViewController {
     init(
         viewModel: AppViewModel,
         viewport: PanelViewport? = nil,
-        onSizeChange: ((NSSize) -> Void)? = nil,
         reduceTransparency: @escaping () -> Bool = {
             NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency
         }
@@ -20,8 +19,7 @@ final class GlassPopoverController: NSViewController {
         host = NSHostingController(rootView: ContentView(
             viewModel: viewModel,
             usesNativeGlass: true,
-            viewport: viewport,
-            onSizeChange: onSizeChange
+            viewport: viewport
         ))
         host.sizingOptions = []
         self.reduceTransparency = reduceTransparency
