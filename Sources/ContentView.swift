@@ -27,6 +27,13 @@ private extension View {
     }
 }
 
+private enum PanelGrid {
+    static let edge: CGFloat = 14
+    static let rowInset: CGFloat = 8
+    static let columnGap: CGFloat = 8
+    static let markWidth: CGFloat = 16
+}
+
 @MainActor
 struct ContentView: View {
     static let panelSize = NSSize(width: 336, height: 312)
@@ -122,10 +129,13 @@ struct ContentView: View {
     @ViewBuilder private var header: some View {
         if viewModel.selectedSection == .displays {
             if let display = selectedDisplay {
-                displayCard(display)
-                    .padding(.horizontal, 14)
-                    .padding(.top, 14)
-                    .padding(.bottom, 8)
+                VStack(spacing: 0) {
+                    displaySummary(display)
+                        .padding(.top, 15)
+                        .padding(.bottom, 12)
+                    PanelDivider()
+                }
+                .padding(.horizontal, PanelGrid.edge)
             } else {
                 Text("HiDPI Quick")
                     .font(.headline)
@@ -133,33 +143,42 @@ struct ContentView: View {
                     .padding(14)
             }
         } else {
-            HStack(spacing: 8) {
+            VStack(alignment: .leading, spacing: 8) {
                 Button {
                     viewModel.selectedSection = .displays
                 } label: {
                     HStack(spacing: 3) {
-                        PanelGlyph("chevron.left", role: .utility)
-                        Text("返回")
+                        Image(systemName: "chevron.left")
+                            .font(.caption2.weight(.semibold))
+                            .accessibilityHidden(true)
+                        Text("返回").font(.caption.weight(.medium))
                     }
+                    .frame(minHeight: 22)
+                    .contentShape(Rectangle())
                 }
+                .buttonStyle(.borderless)
                 .focused($navigationFocus, equals: .back)
                 .accessibilityLabel("返回显示器首页")
-                VStack(alignment: .leading, spacing: 2) {
+
+                VStack(alignment: .leading, spacing: 3) {
                     Text(viewModel.selectedSection.title).font(.headline).accessibilityAddTraits(.isHeader)
                     if viewModel.selectedSection == .allModes, let display = selectedDisplay {
                         HStack(spacing: 6) {
                             Text(displayName(display)).lineLimit(1).help(displayName(display))
                             if let mode = display.currentMode {
-                                Text("当前 \(mode.logicalResolution)").monospacedDigit()
+                                Text("当前 \(mode.logicalResolution)")
+                                    .monospacedDigit().fixedSize(horizontal: true, vertical: false)
                             }
                         }
                         .font(.caption).foregroundStyle(.secondary)
                     }
                 }
-                Spacer(minLength: 0)
             }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 12)
+            .padding(.horizontal, PanelGrid.rowInset)
+            .padding(.top, 9)
+            .padding(.bottom, 11)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, PanelGrid.edge)
         }
     }
 
@@ -171,10 +190,10 @@ struct ContentView: View {
         return "\(display.name) · \(index + 1)"
     }
 
-    private func displayCard(_ display: DisplaySnapshot) -> some View {
-        VStack(alignment: .leading, spacing: 9) {
+    private func displaySummary(_ display: DisplaySnapshot) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 6) {
-                PanelGlyph(display.isBuiltin ? "laptopcomputer" : "display")
+                PanelGlyph(display.isBuiltin ? "laptopcomputer" : "display", role: .brand)
                     .foregroundStyle(.secondary)
                 if viewModel.displays.count > 1 {
                     Menu {
@@ -210,16 +229,19 @@ struct ContentView: View {
             }
 
             if let mode = display.currentMode {
-                HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    Text("当前").font(.caption).foregroundStyle(.secondary)
+                HStack(alignment: .firstTextBaseline, spacing: PanelGrid.columnGap) {
                     Text(mode.logicalResolution)
-                        .font(.system(size: 24, weight: .semibold)).monospacedDigit()
+                        .font(.system(size: 22, weight: .semibold)).monospacedDigit()
                         .lineLimit(1).minimumScaleFactor(0.75)
+                    Text("当前").font(.caption).foregroundStyle(.secondary).fixedSize()
                     Spacer(minLength: 0)
                     Text(mode.isHiDPI ? "2× HiDPI" : "非 HiDPI")
-                        .font(.caption.weight(.semibold))
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.secondary)
                     Text(mode.presentationRefresh)
-                        .font(.caption).monospacedDigit()
+                        .font(.caption.weight(.medium)).monospacedDigit()
+                        .foregroundStyle(.secondary)
+                    Color.clear.frame(width: PanelGrid.markWidth, height: 0)
                 }
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel("当前分辨率 \(mode.logicalResolution)，\(mode.isHiDPI ? "2× HiDPI" : "非 HiDPI")，\(mode.presentationRefresh)，渲染尺寸 \(mode.backingResolution)")
@@ -228,9 +250,8 @@ struct ContentView: View {
                 Text("无法读取当前分辨率").font(.callout).foregroundStyle(.secondary)
             }
         }
-        .padding(12)
+        .padding(.horizontal, PanelGrid.rowInset)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.primary.opacity(0.055), in: RoundedRectangle(cornerRadius: 12))
     }
 
     @ViewBuilder private var pageBody: some View {
@@ -243,6 +264,7 @@ struct ContentView: View {
                         .font(.callout).foregroundStyle(.secondary).padding(.vertical, 6)
                 } else {
                     SectionLabel(title: viewModel.selectedSection == .displays ? "快捷分辨率" : "2× HiDPI 分辨率")
+                        .padding(.leading, PanelGrid.rowInset - 2)
                         .accessibilityAddTraits(.isHeader)
                     let modes = viewModel.selectedSection == .displays ? display.featuredModes : display.modes
                     ForEach(modes) { mode in
@@ -390,7 +412,7 @@ private struct ModeRow: View {
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 8) {
+            HStack(spacing: PanelGrid.columnGap) {
                 Text(mode.logicalResolution)
                     .font(.callout.weight(isSelected ? .semibold : .regular))
                     .monospacedDigit()
@@ -413,13 +435,13 @@ private struct ModeRow: View {
                 .frame(width: 16, height: 18)
                 .accessibilityHidden(true)
             }
-            .padding(.horizontal, 8)
+            .padding(.horizontal, PanelGrid.rowInset)
             .frame(maxWidth: .infinity, minHeight: 30, alignment: .leading)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .background(
-            isSelected ? Color.primary.opacity(0.055) :
+            isSelected ? Color.primary.opacity(0.045) :
                 (isHovered && !isDisabled ? Color.primary.opacity(0.06) : Color.clear),
             in: RoundedRectangle(cornerRadius: 5)
         )

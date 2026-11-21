@@ -3,7 +3,7 @@ import SwiftUI
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
-    private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+    private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
     private let popover = NSPopover()
     private let viewModel = AppViewModel()
     private let viewport = PanelViewport()
@@ -12,11 +12,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         NSApp.setActivationPolicy(.accessory)
 
         if let button = statusItem.button {
-            button.image = NSImage(
-                systemSymbolName: "display.2",
-                accessibilityDescription: "HiDPI Quick"
-            )
-            button.image?.isTemplate = true
+            button.image = StatusMenuGlyph.standard
+            button.imagePosition = .imageOnly
+            button.setAccessibilityLabel("HiDPI Quick")
             button.action = #selector(togglePopover(_:))
             button.target = self
         }
@@ -42,7 +40,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         }
 
         viewModel.onStatusChanged = { [weak self] in
-            self?.updateStatusTitle()
+            self?.updateStatusItem()
         }
         viewModel.onDisplayConfigurationWillChange = { [weak self] in
             self?.closePopoverForDisplayChange()
@@ -117,10 +115,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         NSApp.activate(ignoringOtherApps: true)
     }
 
-    private func updateStatusTitle() {
-        let title = " \(viewModel.mainStatusText)"
-        guard statusItem.button?.title != title else { return }
-        statusItem.button?.title = title
+    private func updateStatusItem() {
+        guard let button = statusItem.button else { return }
+        let status = viewModel.mainStatusText
+        let image = viewModel.primaryDisplay?.isHiDPIActive == true ? StatusMenuGlyph.hiDPI : StatusMenuGlyph.standard
+        let tooltip = "HiDPI Quick · \(status)"
+        guard button.toolTip != tooltip || button.image !== image else { return }
+        button.image = image
+        button.toolTip = tooltip
+        button.setAccessibilityValue(status)
     }
 
     private func closePopoverForDisplayChange() {
