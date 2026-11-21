@@ -36,6 +36,17 @@ private enum PanelGrid {
     static let modeScrollerClearance: CGFloat = 4
 }
 
+/// Shared typographic roles across the three routes of the panel.
+private enum PanelType {
+    static let reading: Font = .system(size: 13)
+    static let action: Font = reading.weight(.medium)
+    static let selected: Font = reading.weight(.semibold)
+    static let heading: Font = .system(size: 15, weight: .semibold)
+    static let resolution: Font = .system(size: 20, weight: .medium)
+    static let detail: Font = .system(size: 12)
+    static let label: Font = detail.weight(.medium)
+}
+
 @MainActor
 struct ContentView: View {
     static let panelSize = NSSize(width: 336, height: 312)
@@ -149,7 +160,7 @@ struct ContentView: View {
                 .padding(.horizontal, PanelGrid.edge)
             } else {
                 Text("HiDPI Quick")
-                    .font(.headline)
+                    .font(PanelType.heading)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(14)
             }
@@ -162,7 +173,7 @@ struct ContentView: View {
                         Image(systemName: "chevron.left")
                             .font(.caption2.weight(.semibold))
                             .accessibilityHidden(true)
-                        Text("返回").font(.caption.weight(.medium))
+                        Text("返回").font(PanelType.action)
                     }
                     .frame(minHeight: 22)
                     .contentShape(Rectangle())
@@ -172,16 +183,17 @@ struct ContentView: View {
                 .accessibilityLabel("返回显示器首页")
 
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(viewModel.selectedSection.title).font(.headline).accessibilityAddTraits(.isHeader)
+                    Text(viewModel.selectedSection.title).font(PanelType.heading).accessibilityAddTraits(.isHeader)
                     if viewModel.selectedSection == .allModes, let display = selectedDisplay {
                         HStack(spacing: 6) {
                             Text(displayName(display)).lineLimit(1).help(displayName(display))
+                            Spacer(minLength: 6)
                             if let mode = display.currentMode {
                                 Text("当前 \(mode.logicalResolution)")
                                     .monospacedDigit().fixedSize(horizontal: true, vertical: false)
                             }
                         }
-                        .font(.caption).foregroundStyle(.secondary)
+                        .font(PanelType.detail).foregroundStyle(.secondary)
                     }
                 }
             }
@@ -220,7 +232,7 @@ struct ContentView: View {
                             }
                         }
                     } label: {
-                        Text(displayName(display)).font(.subheadline.weight(.semibold)).lineLimit(1)
+                        Text(displayName(display)).font(PanelType.action).lineLimit(1)
                     }
                     .menuStyle(.borderlessButton)
                     .fixedSize(horizontal: false, vertical: true)
@@ -229,7 +241,7 @@ struct ContentView: View {
                     .help(displayName(display))
                 } else {
                     Text(displayName(display))
-                        .font(.subheadline.weight(.semibold)).lineLimit(1).help(displayName(display))
+                        .font(PanelType.action).lineLimit(1).help(displayName(display))
                 }
                 Spacer(minLength: 0)
                 if viewModel.controls.keepAwake {
@@ -242,23 +254,24 @@ struct ContentView: View {
             if let mode = display.currentMode {
                 HStack(alignment: .firstTextBaseline, spacing: PanelGrid.columnGap) {
                     Text(mode.logicalResolution)
-                        .font(.system(size: 22, weight: .semibold)).monospacedDigit()
-                        .lineLimit(1).minimumScaleFactor(0.75)
-                    Text("当前").font(.caption).foregroundStyle(.secondary).fixedSize()
+                        .font(PanelType.resolution).monospacedDigit()
+                        .lineLimit(1).minimumScaleFactor(0.85)
                     Spacer(minLength: 0)
-                    Text(mode.isHiDPI ? "2× HiDPI" : "非 HiDPI")
-                        .font(.caption.weight(.medium))
+                    Text(mode.isHiDPI ? "当前 · 2× HiDPI" : "当前 · 非 HiDPI")
+                        .font(PanelType.detail)
                         .foregroundStyle(.secondary)
+                        .fixedSize()
                     Text(mode.presentationRefresh)
-                        .font(.caption.weight(.medium)).monospacedDigit()
+                        .font(PanelType.detail).monospacedDigit()
                         .foregroundStyle(.secondary)
+                        .fixedSize()
                     Color.clear.frame(width: PanelGrid.markWidth, height: 0)
                 }
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel("当前分辨率 \(mode.logicalResolution)，\(mode.isHiDPI ? "2× HiDPI" : "非 HiDPI")，\(mode.presentationRefresh)，渲染尺寸 \(mode.backingResolution)")
                 .help("渲染尺寸 \(mode.backingResolution)")
             } else {
-                Text("无法读取当前分辨率").font(.callout).foregroundStyle(.secondary)
+                Text("无法读取当前分辨率").font(PanelType.reading).foregroundStyle(.secondary)
             }
         }
         .padding(.horizontal, PanelGrid.rowInset)
@@ -272,10 +285,10 @@ struct ContentView: View {
             VStack(alignment: .leading, spacing: 5) {
                 if display.modes.isEmpty {
                     Text("当前没有可选的 HiDPI 分辨率")
-                        .font(.callout).foregroundStyle(.secondary).padding(.vertical, 6)
+                        .font(PanelType.reading).foregroundStyle(.secondary).padding(.vertical, 6)
                 } else {
                     SectionLabel(title: viewModel.selectedSection == .displays ? "快捷分辨率" : "2× HiDPI 分辨率")
-                        .padding(.leading, PanelGrid.rowInset - 2)
+                        .padding(.leading, PanelGrid.rowInset)
                         .accessibilityAddTraits(.isHeader)
                     let modes = viewModel.selectedSection == .displays ? display.featuredModes : display.modes
                     ForEach(modes) { mode in
@@ -332,7 +345,7 @@ struct ContentView: View {
         } label: {
             HStack(spacing: 4) {
                 PanelGlyph(icon, role: .utility)
-                Text(title).font(.callout.weight(.medium))
+                Text(title).font(PanelType.action)
                 Spacer(minLength: 0)
                 PanelGlyph("chevron.right", role: .utility).foregroundStyle(.secondary)
             }
@@ -423,13 +436,13 @@ private struct ModeRow: View {
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: PanelGrid.columnGap) {
+            HStack(alignment: .firstTextBaseline, spacing: PanelGrid.columnGap) {
                 Text(mode.logicalResolution)
-                    .font(.callout.weight(isSelected ? .semibold : .regular))
+                    .font(isSelected ? PanelType.selected : PanelType.reading)
                     .monospacedDigit()
                 Spacer(minLength: 6)
                 Text(showsRefreshRate ? (mode.refreshRate > 0 ? compactRefresh : "自动") : "")
-                    .font(.caption)
+                    .font(PanelType.detail)
                     .foregroundStyle(.secondary)
                     .monospacedDigit()
                     .frame(width: 62, alignment: .trailing)
@@ -443,7 +456,8 @@ private struct ModeRow: View {
                             .foregroundStyle(Color.accentColor)
                     }
                 }
-                .frame(width: 16, height: 18)
+                .frame(width: PanelGrid.markWidth, height: 18)
+                .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 4 }
                 .accessibilityHidden(true)
             }
             .padding(.horizontal, PanelGrid.rowInset)
@@ -480,7 +494,7 @@ private struct ControlsPane: View {
                 ToggleControlRow(
                     icon: "cup.and.saucer.fill",
                     title: "防休眠",
-                    subtitle: viewModel.controls.keepAwake ? "已启用，退出 App 时自动关闭" : "阻止系统休眠和自动屏保",
+                    subtitle: viewModel.controls.keepAwake ? "退出 App 时自动关闭" : "阻止系统休眠和自动屏保",
                     isOn: binding(viewModel.controls.keepAwake, action: viewModel.setKeepAwake),
                     isBusy: viewModel.activeControl == .keepAwake,
                     isInteractionDisabled: viewModel.activeControl != nil
@@ -580,9 +594,9 @@ private struct ToggleControlRow: View {
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
-                    .font(.subheadline.weight(.medium))
+                    .font(PanelType.action)
                 Text(subtitle)
-                    .font(.caption)
+                    .font(PanelType.detail)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
@@ -626,7 +640,7 @@ private struct ActionRow: View {
             HStack(spacing: 10) {
                 PanelGlyph(icon).foregroundStyle(.secondary)
                 Text(title)
-                    .font(.subheadline.weight(.medium))
+                    .font(PanelType.action)
                 Spacer()
 
                 ProgressView()
@@ -667,10 +681,9 @@ private struct SectionLabel: View {
 
     var body: some View {
         Text(title)
-            .font(.caption.weight(.semibold))
+            .font(PanelType.label)
             .foregroundStyle(.secondary)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 2)
     }
 }
 
@@ -699,7 +712,7 @@ private struct FeedbackView: View {
                 Image(systemName: isSuccess ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
                     .padding(.top, 1)
                 Text(feedback.message)
-                    .font(.caption)
+                    .font(PanelType.detail)
                     .fixedSize(horizontal: false, vertical: true)
                 Spacer(minLength: 0)
             }
@@ -709,7 +722,7 @@ private struct FeedbackView: View {
                     onAction(action)
                 }
                 .buttonStyle(.link)
-                .font(.caption.weight(.medium))
+                .font(PanelType.action)
                 .accessibilityHint("打开对应的系统设置页面")
             }
         }
@@ -742,7 +755,7 @@ private struct EmptyStateView: View {
                 .font(.system(size: 24))
                 .foregroundStyle(.secondary)
             Text(title)
-                .font(.subheadline.weight(.medium))
+                .font(PanelType.action)
             Button(actionTitle, action: action)
                 .controlSize(.small)
         }
@@ -793,8 +806,8 @@ private struct FooterButton: View {
                 if let icon { PanelGlyph(icon, role: .utility) }
                 if let title { Text(title) }
             }
-            .font(.caption.weight(.medium))
-            .foregroundStyle(Color.primary.opacity(0.68))
+            .font(PanelType.action)
+            .foregroundStyle(.primary)
             .frame(minWidth: 28, minHeight: 24)
             .contentShape(Rectangle())
         }
