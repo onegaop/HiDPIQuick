@@ -59,7 +59,7 @@ private struct HeaderView: View {
 
     var body: some View {
         HStack(spacing: 7) {
-            PanelGlyph("display.2", role: .utility).foregroundStyle(.secondary)
+            PanelGlyph("display.2", role: .brand).foregroundStyle(.secondary)
             Text("HiDPI Quick").font(.subheadline.weight(.semibold)).foregroundStyle(.secondary)
             Spacer()
             if viewModel.controls.keepAwake {
@@ -92,10 +92,16 @@ private struct PanelDivider: View {
 
 private struct PanelGlyph: View {
     enum Role {
-        case utility, feature
+        case utility, feature, brand
 
-        var size: CGFloat { self == .utility ? 12 : 14 }
-        var slot: CGFloat { self == .utility ? 16 : 24 }
+        var size: CGFloat { self == .feature ? 14 : 12 }
+        var slot: CGFloat {
+            switch self {
+            case .utility: 16
+            case .feature: 24
+            case .brand: 20
+            }
+        }
     }
 
     let name: String
@@ -108,11 +114,20 @@ private struct PanelGlyph: View {
         self.label = label
     }
 
+    private var opticalOffset: CGSize {
+        // Crescent glyphs are bottom-left heavy at both supported raster scales.
+        switch name {
+        case "moon.fill", "moon.zzz.fill": CGSize(width: 1, height: -1)
+        default: .zero
+        }
+    }
+
     var body: some View {
         Image(systemName: name)
             .font(.system(size: role.size, weight: .medium))
             .symbolRenderingMode(.monochrome)
             .frame(width: role.slot, height: 20)
+            .offset(x: opticalOffset.width, y: opticalOffset.height)
             .accessibilityLabel(label ?? "")
             .accessibilityHidden(label == nil)
     }
@@ -224,9 +239,11 @@ private struct DisplaySection: View {
                 SectionLabel(title: "2× HiDPI 分辨率")
                 modeRows(display.featuredModes)
                 if !display.additionalModes.isEmpty {
-                    DisclosureGroup("其他 HiDPI 模式（\(display.additionalModes.count)）", isExpanded: $showsAllModes) {
+                    DisclosureGroup(isExpanded: $showsAllModes) {
                         modeRows(display.additionalModes)
                             .padding(.top, 4)
+                    } label: {
+                        Text(showsAllModes ? "收起其他 HiDPI 模式" : "展开其他 \(display.additionalModes.count) 个 HiDPI 模式")
                     }
                     .font(.callout)
                 }
@@ -466,6 +483,12 @@ private struct ActionRow: View {
     let isInteractionDisabled: Bool
     let action: () -> Void
 
+    @Environment(\.isEnabled) private var isEnabled
+    @State private var isHovered = false
+    @FocusState private var isFocused: Bool
+
+    private var canInteract: Bool { isEnabled && !isInteractionDisabled }
+
     var body: some View {
         Button(action: action) {
             HStack(spacing: 10) {
@@ -485,6 +508,23 @@ private struct ActionRow: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .focused($isFocused)
+        .background {
+            RoundedRectangle(cornerRadius: 6)
+                .fill(canInteract && isHovered ? Color.primary.opacity(0.06) : .clear)
+                .padding(.horizontal, 4)
+                .allowsHitTesting(false)
+        }
+        .overlay {
+            if canInteract && isFocused {
+                RoundedRectangle(cornerRadius: 6)
+                    .strokeBorder(Color.accentColor, lineWidth: 1.5)
+                    .padding(.horizontal, 4)
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
+            }
+        }
+        .onHover { isHovered = $0 }
         .disabled(isInteractionDisabled)
         .accessibilityLabel(title)
     }
@@ -599,8 +639,8 @@ private struct FooterView: View {
             Spacer()
 
             FooterButton(
-                icon: "power",
                 label: "退出 HiDPI Quick",
+                title: "退出",
                 action: { NSApp.terminate(nil) }
             )
         }
@@ -610,7 +650,7 @@ private struct FooterView: View {
 }
 
 private struct FooterButton: View {
-    let icon: String
+    var icon: String? = nil
     let label: String
     var title: String? = nil
     let action: () -> Void
@@ -618,7 +658,7 @@ private struct FooterButton: View {
     var body: some View {
         Button(action: action) {
             HStack(spacing: 5) {
-                PanelGlyph(icon, role: .utility)
+                if let icon { PanelGlyph(icon, role: .utility) }
                 if let title { Text(title) }
             }
             .font(.caption.weight(.medium))
