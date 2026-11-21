@@ -32,6 +32,8 @@ private enum PanelGrid {
     static let rowInset: CGFloat = 8
     static let columnGap: CGFloat = 8
     static let markWidth: CGFloat = 16
+    // The system overlay scroller can grow on hover. Keep it off the row surface.
+    static let modeScrollerClearance: CGFloat = 4
 }
 
 @MainActor
@@ -71,6 +73,14 @@ struct ContentView: View {
         min(viewport.maximumHeight, measuredHeight > 0 ? measuredHeight : Self.panelSize.height)
     }
 
+    private var trailingContentInset: CGFloat {
+        // Legacy scrollers already reserve layout width. Only overlay rails
+        // share the content viewport and need supplemental clearance.
+        let usesOverlayModes = viewModel.selectedSection == .allModes &&
+            NSScroller.preferredScrollerStyle == .overlay
+        return PanelGrid.edge + (usesOverlayModes ? PanelGrid.modeScrollerClearance : 0)
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             header
@@ -80,7 +90,8 @@ struct ContentView: View {
             ScrollView(.vertical, showsIndicators: viewModel.selectedSection == .allModes) {
                 pageBody
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 14)
+                    .padding(.leading, PanelGrid.edge)
+                    .padding(.trailing, trailingContentInset)
                     .padding(.top, 6)
                     .padding(.bottom, 14)
                     .measurePanelHeight(.body)
