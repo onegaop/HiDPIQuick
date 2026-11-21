@@ -165,25 +165,29 @@ struct ContentView: View {
                     .padding(14)
             }
         } else {
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: 3) {
                 Button {
                     viewModel.selectedSection = .displays
                 } label: {
-                    HStack(spacing: 3) {
-                        Image(systemName: "chevron.left")
-                            .font(.caption2.weight(.semibold))
-                            .accessibilityHidden(true)
-                        Text("返回").font(PanelType.action)
-                    }
-                    .frame(minHeight: 22)
-                    .contentShape(Rectangle())
+                    Text("返回")
+                        .font(PanelType.action)
+                        .frame(minHeight: 24)
+                        .padding(.leading, 12)
+                        .overlay(alignment: .leading) {
+                            Image(systemName: "chevron.left")
+                                .font(.system(size: 9, weight: .semibold))
+                                .frame(width: 8)
+                                .accessibilityHidden(true)
+                        }
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.borderless)
+                .padding(.leading, -12) // Chevron in the gutter; text on the shared leading edge.
                 .focused($navigationFocus, equals: .back)
                 .accessibilityLabel("返回显示器首页")
 
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(viewModel.selectedSection.title).font(PanelType.heading).accessibilityAddTraits(.isHeader)
+                    Text(viewModel.selectedSection.title).font(PanelType.selected).accessibilityAddTraits(.isHeader)
                     if viewModel.selectedSection == .allModes, let display = selectedDisplay {
                         HStack(spacing: 6) {
                             Text(displayName(display)).lineLimit(1).help(displayName(display))
@@ -199,7 +203,7 @@ struct ContentView: View {
             }
             .padding(.horizontal, PanelGrid.rowInset)
             .padding(.top, 9)
-            .padding(.bottom, 11)
+            .padding(.bottom, 8)
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, PanelGrid.edge)
         }
@@ -488,7 +492,7 @@ private struct ControlsPane: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            SectionLabel(title: "系统开关")
+            toolSectionLabel("系统开关")
 
             VStack(spacing: 0) {
                 ToggleControlRow(
@@ -538,7 +542,7 @@ private struct ControlsPane: View {
             }
             .controlGroupStyle()
 
-            SectionLabel(title: "快捷动作")
+            toolSectionLabel("快捷动作")
 
             VStack(spacing: 0) {
                 ActionRow(
@@ -559,6 +563,15 @@ private struct ControlsPane: View {
             }
             .controlGroupStyle()
         }
+    }
+
+    private func toolSectionLabel(_ title: String) -> some View {
+        Text(title)
+            .font(PanelType.reading)
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.leading, PanelGrid.rowInset)
+            .accessibilityAddTraits(.isHeader)
     }
 
     private var rowDivider: some View {
