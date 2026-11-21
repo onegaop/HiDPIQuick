@@ -5,6 +5,7 @@ import SwiftUI
 final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
     private let popover = NSPopover()
+    private let outsideClickMonitor = PopoverOutsideClickMonitor()
     private let viewModel = AppViewModel()
     private let viewport = PanelViewport()
 
@@ -73,12 +74,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        outsideClickMonitor.stop()
         viewModel.shutdown()
         NotificationCenter.default.removeObserver(self)
     }
 
     func popoverWillShow(_ notification: Notification) {
         viewModel.refresh()
+    }
+
+    func popoverDidShow(_ notification: Notification) {
+        outsideClickMonitor.start { [weak self] in
+            guard let self, self.popover.isShown else { return }
+            self.popover.performClose(nil)
+        }
+    }
+
+    func popoverDidClose(_ notification: Notification) {
+        outsideClickMonitor.stop()
     }
 
 
