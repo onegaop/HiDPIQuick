@@ -45,6 +45,7 @@ private enum PanelType {
     static let resolution: Font = .system(size: 20, weight: .medium)
     static let detail: Font = .system(size: 12)
     static let label: Font = detail.weight(.medium)
+    static let detailInk = Color.primary.opacity(0.80)
 }
 
 @MainActor
@@ -165,48 +166,58 @@ struct ContentView: View {
                     .padding(14)
             }
         } else {
-            VStack(alignment: .leading, spacing: 3) {
-                Button {
-                    viewModel.selectedSection = .displays
-                } label: {
-                    Text("返回")
-                        .font(PanelType.action)
-                        .frame(minHeight: 24)
-                        .padding(.leading, 12)
-                        .overlay(alignment: .leading) {
-                            Image(systemName: "chevron.left")
-                                .font(.system(size: 9, weight: .semibold))
-                                .frame(width: 8)
-                                .accessibilityHidden(true)
-                        }
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.borderless)
-                .padding(.leading, -12) // Chevron in the gutter; text on the shared leading edge.
-                .focused($navigationFocus, equals: .back)
-                .accessibilityLabel("返回显示器首页")
-
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(viewModel.selectedSection.title).font(PanelType.selected).accessibilityAddTraits(.isHeader)
-                    if viewModel.selectedSection == .allModes, let display = selectedDisplay {
-                        HStack(spacing: 6) {
-                            Text(displayName(display)).lineLimit(1).help(displayName(display))
-                            Spacer(minLength: 6)
-                            if let mode = display.currentMode {
-                                Text("当前 \(mode.logicalResolution)")
-                                    .monospacedDigit().fixedSize(horizontal: true, vertical: false)
-                            }
-                        }
-                        .font(PanelType.detail).foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 5) {
+                HStack(spacing: 6) {
+                    Button {
+                        viewModel.selectedSection = .displays
+                    } label: {
+                        Image(systemName: "chevron.left")
+                            .font(.system(size: 11, weight: .semibold))
+                            .frame(width: 28, height: 28)
+                            .background(.quaternary, in: Circle())
+                            .contentShape(Circle())
                     }
+                    .buttonStyle(.borderless)
+                    .focused($navigationFocus, equals: .back)
+                    .accessibilityLabel("返回显示器首页")
+                    .help("返回")
+
+                    Text(viewModel.selectedSection.title)
+                        .font(PanelType.heading)
+                        .accessibilityAddTraits(.isHeader)
+                }
+
+                if viewModel.selectedSection == .allModes, let display = selectedDisplay {
+                    modeContext(for: display)
                 }
             }
             .padding(.horizontal, PanelGrid.rowInset)
-            .padding(.top, 9)
-            .padding(.bottom, 8)
+            .padding(.top, 10)
+            .padding(.bottom, 9)
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, PanelGrid.edge)
         }
+    }
+
+    private func modeContext(for display: DisplaySnapshot) -> some View {
+        let name = displayName(display)
+        let resolution = display.currentMode.map { "当前 \($0.logicalResolution)" }
+        return ViewThatFits(in: .horizontal) {
+            HStack(spacing: 10) {
+                Text(name).fixedSize()
+                if let resolution {
+                    Spacer(minLength: 4)
+                    Text(resolution).monospacedDigit().fixedSize()
+                }
+            }
+            VStack(alignment: .leading, spacing: 2) {
+                Text(name).lineLimit(2).fixedSize(horizontal: false, vertical: true)
+                if let resolution { Text(resolution).monospacedDigit() }
+            }
+        }
+        .font(PanelType.detail)
+        .foregroundStyle(PanelType.detailInk)
+        .help(name)
     }
 
     private func displayName(_ display: DisplaySnapshot) -> String {
@@ -263,11 +274,11 @@ struct ContentView: View {
                     Spacer(minLength: 0)
                     Text(mode.isHiDPI ? "当前 · 2× HiDPI" : "当前 · 非 HiDPI")
                         .font(PanelType.detail)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(PanelType.detailInk)
                         .fixedSize()
                     Text(mode.presentationRefresh)
                         .font(PanelType.detail).monospacedDigit()
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(PanelType.detailInk)
                         .fixedSize()
                     Color.clear.frame(width: PanelGrid.markWidth, height: 0)
                 }
@@ -331,7 +342,7 @@ struct ContentView: View {
                 HStack(spacing: 8) {
                     routeButton("全部模式", icon: "list.bullet", section: .allModes, focus: .allModes)
                         .disabled(selectedDisplay?.modes.isEmpty != false)
-                    routeButton("系统工具", icon: "slider.horizontal.3", section: .controls, focus: .tools)
+                    routeButton("系统工具", icon: "gearshape", section: .controls, focus: .tools)
                 }
                 .padding(.horizontal, 14)
                 .padding(.top, 6)
@@ -413,19 +424,50 @@ private struct PanelGlyph: View {
     private var opticalOffset: CGSize {
         // Crescent glyphs are bottom-left heavy at both supported raster scales.
         switch name {
-        case "moon.fill", "moon.zzz.fill": CGSize(width: 1, height: -1)
+        case "moon": CGSize(width: 1, height: -1)
         default: .zero
         }
     }
 
     var body: some View {
-        Image(systemName: name)
-            .font(.system(size: role.size, weight: .medium))
-            .symbolRenderingMode(.monochrome)
+        Group {
+            if name == "displayOff" {
+                DisplayOffGlyph()
+                    .frame(width: 17, height: 16)
+            } else {
+                Image(systemName: name)
+                    .font(.system(size: role.size, weight: .medium))
+                    .symbolRenderingMode(.monochrome)
+            }
+        }
             .frame(width: role.slot, height: 20)
             .offset(x: opticalOffset.width, y: opticalOffset.height)
             .accessibilityLabel(label ?? "")
             .accessibilityHidden(label == nil)
+    }
+}
+
+/// A monitor crossed out, distinct from the crescent used for appearance.
+private struct DisplayOffGlyph: View {
+    var body: some View {
+        Path { path in
+            // Break the outline where the slash crosses rather than drawing on top of it.
+            path.move(to: CGPoint(x: 7, y: 3))
+            path.addLine(to: CGPoint(x: 14, y: 3))
+            path.addQuadCurve(to: CGPoint(x: 15.5, y: 4.5), control: CGPoint(x: 15.5, y: 3))
+            path.addLine(to: CGPoint(x: 15.5, y: 11))
+            path.move(to: CGPoint(x: 1.5, y: 6))
+            path.addLine(to: CGPoint(x: 1.5, y: 10.5))
+            path.addQuadCurve(to: CGPoint(x: 3, y: 12), control: CGPoint(x: 1.5, y: 12))
+            path.addLine(to: CGPoint(x: 10, y: 12))
+            path.move(to: CGPoint(x: 8, y: 12))
+            path.addLine(to: CGPoint(x: 8, y: 14.5))
+            path.move(to: CGPoint(x: 5.5, y: 14.5))
+            path.addLine(to: CGPoint(x: 10.5, y: 14.5))
+            path.move(to: CGPoint(x: 2, y: 1.5))
+            path.addLine(to: CGPoint(x: 15, y: 14.5))
+        }
+        .stroke(style: StrokeStyle(lineWidth: 1.3, lineCap: .round, lineJoin: .round))
     }
 }
 
@@ -447,7 +489,7 @@ private struct ModeRow: View {
                 Spacer(minLength: 6)
                 Text(showsRefreshRate ? (mode.refreshRate > 0 ? compactRefresh : "自动") : "")
                     .font(PanelType.detail)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(PanelType.detailInk)
                     .monospacedDigit()
                     .frame(width: 62, alignment: .trailing)
                     .accessibilityHidden(true)
@@ -496,7 +538,7 @@ private struct ControlsPane: View {
 
             VStack(spacing: 0) {
                 ToggleControlRow(
-                    icon: "cup.and.saucer.fill",
+                    icon: "cup.and.saucer",
                     title: "防休眠",
                     subtitle: viewModel.controls.keepAwake ? "退出 App 时自动关闭" : "阻止系统休眠和自动屏保",
                     isOn: binding(viewModel.controls.keepAwake, action: viewModel.setKeepAwake),
@@ -505,7 +547,7 @@ private struct ControlsPane: View {
                 )
                 rowDivider
                 ToggleControlRow(
-                    icon: "moon.fill",
+                    icon: "moon",
                     title: "深色模式",
                     subtitle: viewModel.controls.darkMode ? "当前使用深色外观" : "当前使用浅色外观",
                     isOn: binding(viewModel.controls.darkMode, action: viewModel.setDarkMode),
@@ -523,7 +565,7 @@ private struct ControlsPane: View {
                 )
                 rowDivider
                 ToggleControlRow(
-                    icon: "eye.fill",
+                    icon: "eye",
                     title: "显示隐藏文件",
                     subtitle: viewModel.controls.hiddenFilesVisible ? "Finder 正在显示隐藏项目" : "Finder 当前不显示隐藏文件",
                     isOn: binding(viewModel.controls.hiddenFilesVisible, action: viewModel.setHiddenFilesVisible),
@@ -546,7 +588,7 @@ private struct ControlsPane: View {
 
             VStack(spacing: 0) {
                 ActionRow(
-                    icon: "play.rectangle.fill",
+                    icon: "play.rectangle",
                     title: "启动屏幕保护程序",
                     isBusy: viewModel.activeControl == .screenSaver,
                     isInteractionDisabled: viewModel.activeControl != nil,
@@ -554,7 +596,7 @@ private struct ControlsPane: View {
                 )
                 rowDivider
                 ActionRow(
-                    icon: "moon.zzz.fill",
+                    icon: "displayOff",
                     title: "立即关闭显示器",
                     isBusy: viewModel.activeControl == .displaySleep,
                     isInteractionDisabled: viewModel.activeControl != nil,
@@ -567,8 +609,8 @@ private struct ControlsPane: View {
 
     private func toolSectionLabel(_ title: String) -> some View {
         Text(title)
-            .font(PanelType.reading)
-            .foregroundStyle(.secondary)
+            .font(PanelType.label)
+            .foregroundStyle(PanelType.detailInk)
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.leading, PanelGrid.rowInset)
             .accessibilityAddTraits(.isHeader)
@@ -610,7 +652,7 @@ private struct ToggleControlRow: View {
                     .font(PanelType.action)
                 Text(subtitle)
                     .font(PanelType.detail)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(PanelType.detailInk)
                     .lineLimit(1)
             }
 
@@ -631,7 +673,7 @@ private struct ToggleControlRow: View {
                 .accessibilityHint(isBusy ? "正在应用设置" : "")
         }
         .padding(.horizontal, 12)
-        .frame(minHeight: 40)
+        .frame(minHeight: 42)
     }
 }
 
@@ -695,7 +737,7 @@ private struct SectionLabel: View {
     var body: some View {
         Text(title)
             .font(PanelType.label)
-            .foregroundStyle(.secondary)
+            .foregroundStyle(PanelType.detailInk)
             .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
