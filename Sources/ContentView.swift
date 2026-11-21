@@ -2,7 +2,9 @@ import Cocoa
 import SwiftUI
 
 struct ContentView: View {
+    static let panelSize = NSSize(width: 336, height: 450)
     @ObservedObject var viewModel: AppViewModel
+    @State private var selectedDisplayID: DisplaySnapshot.ID?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -18,32 +20,27 @@ struct ContentView: View {
             .pickerStyle(.segmented)
             .labelsHidden()
             .padding(.horizontal, 14)
-            .padding(.vertical, 12)
+            .padding(.vertical, 8)
 
             Group {
                 switch viewModel.selectedSection {
                 case .displays:
-                    DisplaysPane(viewModel: viewModel)
+                    DisplaysPane(viewModel: viewModel, selectedDisplayID: $selectedDisplayID)
                 case .controls:
                     ControlsPane(viewModel: viewModel)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .overlay(alignment: .bottom) {
-                if let feedback = viewModel.feedback {
-                    FeedbackView(
-                        feedback: feedback,
-                        onAction: viewModel.performFeedbackAction
-                    )
-                    .padding(.horizontal, 14)
-                    .padding(.bottom, 10)
-                }
+            if let feedback = viewModel.feedback {
+                FeedbackView(feedback: feedback, onAction: viewModel.performFeedbackAction)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
             }
 
             Divider()
             FooterView(viewModel: viewModel)
         }
-        .frame(width: 420, height: 620)
+        .frame(width: Self.panelSize.width, height: Self.panelSize.height)
         .background(Color(nsColor: .windowBackgroundColor))
     }
 }
@@ -52,236 +49,202 @@ private struct HeaderView: View {
     @ObservedObject var viewModel: AppViewModel
 
     var body: some View {
-        HStack(spacing: 11) {
+        HStack(spacing: 7) {
             Image(systemName: "display.2")
-                .font(.system(size: 17, weight: .semibold))
-                .foregroundStyle(Color.accentColor)
-                .frame(width: 32, height: 32)
-                .background(Color.accentColor.opacity(0.11), in: RoundedRectangle(cornerRadius: 8))
+                .foregroundStyle(.secondary)
                 .accessibilityHidden(true)
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text("HiDPI Quick")
-                    .font(.headline)
-                Text(viewModel.mainSummary)
-                    .font(.caption)
+            Text("HiDPI Quick").font(.headline)
+            Spacer()
+            if viewModel.controls.keepAwake {
+                Label("防休眠已开启", systemImage: "cup.and.saucer")
+                    .labelStyle(.iconOnly)
                     .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
+                    .help("防休眠已开启")
             }
-
-            Spacer(minLength: 8)
-
-            StatusBadge(
-                text: viewModel.mainStatusText,
-                isActive: viewModel.primaryDisplay?.isHiDPIActive == true
-            )
         }
-        .padding(14)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
     }
 }
 
 private struct DisplaysPane: View {
     @ObservedObject var viewModel: AppViewModel
+    @Binding var selectedDisplayID: DisplaySnapshot.ID?
+
+    private var selectedDisplay: DisplaySnapshot? {
+        viewModel.displays.first { $0.id == selectedDisplayID } ??
+            viewModel.primaryDisplay ?? viewModel.displays.first
+    }
 
     var body: some View {
-        if viewModel.displays.isEmpty {
+        if let display = selectedDisplay {
+            ScrollView(.vertical, showsIndicators: false) {
+                VStack(alignment: .leading, spacing: 8) {
+                    if viewModel.displays.count > 1 {
+                        Picker("显示器", selection: Binding(
+                            get: { selectedDisplay?.id ?? display.id },
+                            set: { selectedDisplayID = $0 }
+                        )) {
+                            ForEach(viewModel.displays) { item in
+                                Text(item.name).tag(item.id)
+                            }
+                        }
+                        .pickerStyle(.menu)
+                        .controlSize(.small)
+                    }
+                    DisplaySection(
+                        display: display,
+                        showName: viewModel.displays.count == 1,
+                        activeModeID: viewModel.activeModeID,
+                        onSelect: viewModel.selectMode
+                    )
+                    .id(display.id)
+                }
+                .padding(.horizontal, 14)
+                .padding(.bottom, 8)
+            }
+        } else {
             EmptyStateView(
                 icon: "display.trianglebadge.exclamationmark",
                 title: "未检测到显示器",
                 actionTitle: "重新检测",
                 action: viewModel.refresh
             )
-        } else {
-            ScrollView(.vertical, showsIndicators: false) {
-                LazyVStack(spacing: 14) {
-                    ForEach(viewModel.displays) { display in
-                        DisplaySection(
-                            display: display,
-                            activeModeID: viewModel.activeModeID,
-                            onSelect: viewModel.selectMode
-                        )
-                    }
-                }
-                .padding(.horizontal, 14)
-                .padding(.bottom, 14 + (viewModel.feedback == nil ? 0 : 54))
-            }
         }
     }
 }
 
 private struct DisplaySection: View {
     let display: DisplaySnapshot
+    let showName: Bool
     let activeModeID: String?
     let onSelect: (DisplayMode) -> Void
     @State private var showsAllModes = false
 
     var body: some View {
-        VStack(spacing: 0) {
-            HStack(alignment: .top, spacing: 10) {
-                Image(systemName: display.isBuiltin ? "laptopcomputer" : "display")
-                    .font(.system(size: 14, weight: .medium))
-                    .foregroundStyle(.secondary)
-                    .frame(width: 24, height: 24)
-
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(display.name)
-                        .font(.subheadline.weight(.semibold))
-                        .lineLimit(1)
-                    Text(displaySubtitle)
-                        .font(.caption2.weight(.medium))
-                        .foregroundStyle(display.isHiDPIActive ? Color.green : Color.secondary)
-                    Text(currentModeDescription)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(2)
-                }
-
-                Spacer(minLength: 8)
-
-                StatusBadge(
-                    text: display.isHiDPIActive ? "2x" : "非 2x",
-                    isActive: display.isHiDPIActive
-                )
+        VStack(alignment: .leading, spacing: 6) {
+            if showName {
+                Label(display.name, systemImage: display.isBuiltin ? "laptopcomputer" : "display")
+                    .font(.subheadline.weight(.semibold))
+                    .lineLimit(1)
+                    .help(display.name)
             }
-            .padding(12)
+            HStack(spacing: 6) {
+                Text("当前").foregroundStyle(.secondary)
+                if let mode = display.currentMode {
+                    Text(mode.logicalResolution).monospacedDigit()
+                    Text(mode.isHiDPI ? "2× HiDPI" : "非 HiDPI").foregroundStyle(.secondary)
+                    Spacer(minLength: 4)
+                    if mode.refreshRate > 0 {
+                        Text(mode.refreshRateText).foregroundStyle(.secondary)
+                    }
+                } else {
+                    Text("无法读取分辨率").foregroundStyle(.secondary)
+                }
+            }
+            .font(.callout)
+            .accessibilityElement(children: .combine)
+            if let mode = display.currentMode {
+                Text("渲染尺寸 \(mode.backingResolution)")
+                    .font(.caption)
+                    .monospacedDigit()
+                    .foregroundStyle(.secondary)
+            }
 
-            Divider()
+            Divider().padding(.vertical, 2)
 
             if display.modes.isEmpty {
-                HStack(spacing: 8) {
-                    Image(systemName: "exclamationmark.circle")
-                    Text("当前没有可用的 2x HiDPI 分辨率")
-                }
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(12)
+                Text("当前没有可选的 HiDPI 分辨率")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .padding(.vertical, 6)
             } else {
+                SectionLabel(title: "2× HiDPI 分辨率")
                 modeRows(display.featuredModes)
-
                 if !display.additionalModes.isEmpty {
-                    Divider().padding(.leading, 12)
-
-                    DisclosureGroup(isExpanded: $showsAllModes) {
-                        VStack(spacing: 0) {
-                            Divider().padding(.leading, 12)
-                            modeRows(display.additionalModes)
-                        }
-                    } label: {
-                        Text("其他 \(display.additionalModes.count) 个 HiDPI 模式")
-                            .font(.caption.weight(.medium))
-                            .foregroundStyle(.secondary)
+                    DisclosureGroup("其他 HiDPI 模式（\(display.additionalModes.count)）", isExpanded: $showsAllModes) {
+                        modeRows(display.additionalModes)
+                            .padding(.top, 4)
                     }
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 10)
+                    .font(.callout)
                 }
             }
         }
-        .background(Color(nsColor: .controlBackgroundColor))
-        .clipShape(RoundedRectangle(cornerRadius: 8))
-        .overlay {
-            RoundedRectangle(cornerRadius: 8)
-                .strokeBorder(Color(nsColor: .separatorColor).opacity(0.35))
-        }
     }
 
-    private var currentModeDescription: String {
-        guard let mode = display.currentMode else {
-            return "无法读取当前分辨率"
-        }
-        return "\(mode.logicalResolution) → \(mode.backingResolution) · \(mode.refreshRateText)"
-    }
-
-    private var displaySubtitle: String {
-        let kind = display.isBuiltin ? "内建显示器" : "外接显示器"
-        return display.isHiDPIActive ? "\(kind) · 真正 2x HiDPI" : "\(kind) · 当前不是 2x 模式"
-    }
-
-    @ViewBuilder
     private func modeRows(_ modes: [DisplayMode]) -> some View {
-        ForEach(Array(modes.enumerated()), id: \.element.id) { index, mode in
-            ModeRow(
-                mode: mode,
-                context: context(for: mode, in: modes),
-                isSelected: display.currentMode?.matches(mode) == true,
-                isBusy: activeModeID == mode.id,
-                isDisabled: activeModeID != nil,
-                action: { onSelect(mode) }
-            )
-
-            if index < modes.count - 1 {
-                Divider().padding(.leading, 12)
+        VStack(spacing: 2) {
+            ForEach(modes) { mode in
+                ModeRow(
+                    mode: mode,
+                    isSelected: display.currentMode?.matches(mode) == true,
+                    showsRefreshRate: display.modes.contains {
+                        $0.width == mode.width && $0.height == mode.height && $0.id != mode.id
+                    },
+                    isBusy: activeModeID == mode.id,
+                    isDisabled: activeModeID != nil || display.currentMode == nil,
+                    action: { onSelect(mode) }
+                )
             }
         }
-    }
-
-    private func context(for mode: DisplayMode, in modes: [DisplayMode]) -> String? {
-        if display.currentMode?.matches(mode) == true {
-            return "当前"
-        }
-        if mode.id == display.modes.first?.id {
-            return "更多空间"
-        }
-        if mode.id == modes.last?.id,
-           let currentMode = display.currentMode,
-           mode.width < currentMode.width {
-            return "较大文字"
-        }
-        return nil
     }
 }
 
 private struct ModeRow: View {
     let mode: DisplayMode
-    let context: String?
     let isSelected: Bool
+    let showsRefreshRate: Bool
     let isBusy: Bool
     let isDisabled: Bool
     let action: () -> Void
+    @State private var isHovered = false
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 10) {
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(mode.logicalResolution)
-                        .font(.system(.body, design: .monospaced).weight(.medium))
-                        .monospacedDigit()
-                    Text("\(mode.refreshRateText) / 渲染 \(mode.backingResolution)")
-                        .font(.caption2)
+            HStack(spacing: 8) {
+                Text(mode.logicalResolution)
+                    .font(.callout.weight(isSelected ? .semibold : .regular))
+                    .monospacedDigit()
+                Spacer(minLength: 6)
+                if showsRefreshRate {
+                    Text(mode.refreshRate > 0 ? compactRefresh : "自动")
+                        .font(.caption)
                         .foregroundStyle(.secondary)
                         .monospacedDigit()
                 }
-
-                Spacer(minLength: 8)
-
-                if let context {
-                    Text(context)
-                        .font(.caption2.weight(.medium))
-                        .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
+                Group {
+                    if isBusy {
+                        ProgressView().controlSize(.small)
+                    } else if isSelected {
+                        Image(systemName: "checkmark")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(Color.accentColor)
+                    }
                 }
-
-                if isBusy {
-                    ProgressView().controlSize(.small)
-                } else if isSelected {
-                    Image(systemName: "checkmark.circle.fill")
-                        .foregroundStyle(Color.accentColor)
-                        .accessibilityLabel("当前分辨率")
-                }
+                .frame(width: 16)
+                .accessibilityHidden(true)
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 9)
-            .frame(maxWidth: .infinity, minHeight: 52, alignment: .leading)
+            .padding(.horizontal, 8)
+            .frame(maxWidth: .infinity, minHeight: 30, alignment: .leading)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .background(isSelected ? Color.accentColor.opacity(0.10) : Color.clear)
-        .disabled(isDisabled)
-        .accessibilityLabel(
-            "\(mode.logicalResolution)，2x HiDPI，渲染 \(mode.backingResolution)，\(mode.refreshRateText)"
+        .background(
+            isSelected ? Color.accentColor.opacity(0.10) :
+                (isHovered && !isDisabled ? Color.primary.opacity(0.06) : Color.clear),
+            in: RoundedRectangle(cornerRadius: 5)
         )
-        .accessibilityValue(isSelected ? "当前选中" : "可选择")
-        .accessibilityHint("选择后立即切换分辨率并关闭菜单")
+        .onHover { isHovered = $0 }
+        .disabled(isDisabled)
+        .help("渲染 \(mode.backingResolution) · \(mode.refreshRateText)")
+        .accessibilityLabel("\(mode.logicalResolution)，HiDPI，\(mode.refreshRateText)")
+        .accessibilityValue(isBusy ? "正在切换" : (isSelected ? "当前分辨率" : ""))
+        .accessibilityHint(isSelected || isDisabled ? "" : "立即切换并关闭菜单")
+    }
+
+    private var compactRefresh: String {
+        let value = mode.refreshRate.formatted(.number.precision(.fractionLength(0...2)))
+        return "\(value) Hz"
     }
 }
 
@@ -289,8 +252,8 @@ private struct ControlsPane: View {
     @ObservedObject var viewModel: AppViewModel
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 14) {
+        ScrollView(.vertical, showsIndicators: false) {
+            VStack(alignment: .leading, spacing: 9) {
                 SectionLabel(title: "系统开关")
 
                 VStack(spacing: 0) {
@@ -363,12 +326,12 @@ private struct ControlsPane: View {
                 .controlGroupStyle()
             }
             .padding(.horizontal, 14)
-            .padding(.bottom, 14 + (viewModel.feedback == nil ? 0 : 54))
+            .padding(.bottom, 8)
         }
     }
 
     private var rowDivider: some View {
-        Divider().padding(.leading, 50)
+        Divider().padding(.leading, 42)
     }
 
     private func binding(
@@ -419,12 +382,12 @@ private struct ToggleControlRow: View {
                 .labelsHidden()
                 .toggleStyle(.switch)
                 .controlSize(.small)
-                .allowsHitTesting(!isInteractionDisabled)
+                .disabled(isInteractionDisabled)
                 .accessibilityLabel(title)
                 .accessibilityHint(isBusy ? "正在应用设置" : "")
         }
         .padding(.horizontal, 12)
-        .frame(minHeight: 56)
+        .frame(minHeight: 42)
     }
 }
 
@@ -450,11 +413,11 @@ private struct ActionRow: View {
                     .accessibilityHidden(!isBusy)
             }
             .padding(.horizontal, 12)
-            .frame(minHeight: 50)
+            .frame(minHeight: 34)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .allowsHitTesting(!isInteractionDisabled)
+        .disabled(isInteractionDisabled)
         .accessibilityLabel(title)
     }
 }
@@ -465,9 +428,8 @@ private struct ControlIcon: View {
     var body: some View {
         Image(systemName: name)
             .font(.system(size: 14, weight: .medium))
-            .foregroundStyle(Color.accentColor)
-            .frame(width: 28, height: 28)
-            .background(Color.accentColor.opacity(0.10), in: RoundedRectangle(cornerRadius: 7))
+            .foregroundStyle(.secondary)
+            .frame(width: 20, height: 24)
             .accessibilityHidden(true)
     }
 }
@@ -545,29 +507,6 @@ private struct FeedbackView: View {
     }
 }
 
-private struct StatusBadge: View {
-    let text: String
-    let isActive: Bool
-
-    var body: some View {
-        HStack(spacing: 5) {
-            Image(systemName: isActive ? "checkmark.circle.fill" : "circle.dashed")
-                .font(.caption2)
-            Text(text)
-                .font(.caption2.weight(.semibold))
-                .lineLimit(1)
-        }
-        .foregroundStyle(isActive ? Color.green : Color.secondary)
-        .padding(.horizontal, 8)
-        .padding(.vertical, 5)
-        .background(
-            (isActive ? Color.green : Color.secondary).opacity(0.11),
-            in: Capsule()
-        )
-        .accessibilityElement(children: .combine)
-    }
-}
-
 private struct EmptyStateView: View {
     let icon: String
     let title: String
@@ -597,6 +536,7 @@ private struct FooterView: View {
             FooterButton(
                 icon: "display",
                 label: "打开显示器设置",
+                title: "显示器设置",
                 action: viewModel.openDisplaysSettings
             )
             FooterButton(
@@ -621,13 +561,18 @@ private struct FooterView: View {
 private struct FooterButton: View {
     let icon: String
     let label: String
+    var title: String? = nil
     let action: () -> Void
 
     var body: some View {
         Button(action: action) {
-            Image(systemName: icon)
-                .frame(width: 28, height: 24)
-                .contentShape(Rectangle())
+            HStack(spacing: 5) {
+                Image(systemName: icon)
+                if let title { Text(title) }
+            }
+            .font(.callout)
+            .frame(minWidth: 28, minHeight: 24)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.borderless)
         .accessibilityLabel(label)
