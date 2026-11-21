@@ -54,8 +54,9 @@ final class SystemController: @unchecked Sendable {
         switch SMAppService.mainApp.status {
         case .enabled: .enabled
         case .requiresApproval: .pendingApproval
-        case .notRegistered: .off
-        case .notFound: .unavailable
+        // Air returned .notFound for a fresh main-app service that registered
+        // successfully on the first explicit request. It must not pre-disable the switch.
+        case .notRegistered, .notFound: .off
         @unknown default: .unavailable
         }
     }
