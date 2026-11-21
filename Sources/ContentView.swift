@@ -59,15 +59,11 @@ private struct HeaderView: View {
 
     var body: some View {
         HStack(spacing: 7) {
-            Image(systemName: "display.2")
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(.secondary)
-                .accessibilityHidden(true)
+            PanelGlyph("display.2", role: .utility).foregroundStyle(.secondary)
             Text("HiDPI Quick").font(.subheadline.weight(.semibold)).foregroundStyle(.secondary)
             Spacer()
             if viewModel.controls.keepAwake {
-                Label("防休眠已开启", systemImage: "cup.and.saucer")
-                    .labelStyle(.iconOnly)
+                PanelGlyph("cup.and.saucer", role: .utility, label: "防休眠已开启")
                     .foregroundStyle(.secondary)
                     .help("防休眠已开启")
             }
@@ -77,12 +73,48 @@ private struct HeaderView: View {
     }
 }
 
+/// A hairline tracks the hosting screen's scale and snaps to a device-pixel row.
 private struct PanelDivider: View {
+    @Environment(\.displayScale) private var scale
+
     var body: some View {
-        Rectangle()
-            .fill(Color(nsColor: .separatorColor).opacity(0.6))
-            .frame(height: 1)
-            .accessibilityHidden(true)
+        let pixel = 1 / max(1, scale)
+        GeometryReader { geometry in
+            let y = geometry.frame(in: .global).minY
+            Rectangle()
+                .fill(Color(nsColor: .separatorColor).opacity(0.72))
+                .offset(y: (y / pixel).rounded() * pixel - y)
+        }
+        .frame(height: pixel)
+        .accessibilityHidden(true)
+    }
+}
+
+private struct PanelGlyph: View {
+    enum Role {
+        case utility, feature
+
+        var size: CGFloat { self == .utility ? 12 : 14 }
+        var slot: CGFloat { self == .utility ? 16 : 24 }
+    }
+
+    let name: String
+    var role: Role = .feature
+    var label: String? = nil
+
+    init(_ name: String, role: Role = .feature, label: String? = nil) {
+        self.name = name
+        self.role = role
+        self.label = label
+    }
+
+    var body: some View {
+        Image(systemName: name)
+            .font(.system(size: role.size, weight: .medium))
+            .symbolRenderingMode(.monochrome)
+            .frame(width: role.slot, height: 20)
+            .accessibilityLabel(label ?? "")
+            .accessibilityHidden(label == nil)
     }
 }
 
@@ -143,11 +175,8 @@ private struct DisplaySection: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .center, spacing: 9) {
-                Image(systemName: display.isBuiltin ? "laptopcomputer" : "display")
-                    .font(.system(size: 15, weight: .medium))
+                PanelGlyph(display.isBuiltin ? "laptopcomputer" : "display")
                     .foregroundStyle(.secondary)
-                    .frame(width: 24)
-                    .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 3) {
                     if showName {
                         Text(display.name)
@@ -245,22 +274,22 @@ private struct ModeRow: View {
                     .font(.callout.weight(isSelected ? .semibold : .regular))
                     .monospacedDigit()
                 Spacer(minLength: 6)
-                if showsRefreshRate {
-                    Text(mode.refreshRate > 0 ? compactRefresh : "自动")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .monospacedDigit()
-                }
-                Group {
+                Text(showsRefreshRate ? (mode.refreshRate > 0 ? compactRefresh : "自动") : "")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+                    .frame(width: 62, alignment: .trailing)
+                    .accessibilityHidden(true)
+                ZStack {
+                    Color.clear
                     if isBusy {
                         ProgressView().controlSize(.small)
                     } else if isSelected {
-                        Image(systemName: "checkmark")
-                            .font(.caption.weight(.semibold))
+                        PanelGlyph("checkmark", role: .utility)
                             .foregroundStyle(Color.accentColor)
                     }
                 }
-                .frame(width: 16)
+                .frame(width: 16, height: 18)
                 .accessibilityHidden(true)
             }
             .padding(.horizontal, 8)
@@ -370,7 +399,7 @@ private struct ControlsPane: View {
     }
 
     private var rowDivider: some View {
-        PanelDivider().padding(.leading, 36)
+        PanelDivider().padding(.leading, 46)
     }
 
     private func binding(
@@ -398,7 +427,7 @@ private struct ToggleControlRow: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            ControlIcon(name: icon)
+            PanelGlyph(icon).foregroundStyle(.secondary)
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
@@ -440,7 +469,7 @@ private struct ActionRow: View {
     var body: some View {
         Button(action: action) {
             HStack(spacing: 10) {
-                ControlIcon(name: icon)
+                PanelGlyph(icon).foregroundStyle(.secondary)
                 Text(title)
                     .font(.subheadline.weight(.medium))
                 Spacer()
@@ -458,18 +487,6 @@ private struct ActionRow: View {
         .buttonStyle(.plain)
         .disabled(isInteractionDisabled)
         .accessibilityLabel(title)
-    }
-}
-
-private struct ControlIcon: View {
-    let name: String
-
-    var body: some View {
-        Image(systemName: name)
-            .font(.system(size: 14, weight: .medium))
-            .foregroundStyle(.secondary)
-            .frame(width: 20, height: 24)
-            .accessibilityHidden(true)
     }
 }
 
@@ -601,7 +618,7 @@ private struct FooterButton: View {
     var body: some View {
         Button(action: action) {
             HStack(spacing: 5) {
-                Image(systemName: icon)
+                PanelGlyph(icon, role: .utility)
                 if let title { Text(title) }
             }
             .font(.caption.weight(.medium))
