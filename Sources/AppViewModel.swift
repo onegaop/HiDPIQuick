@@ -16,6 +16,7 @@ final class AppViewModel: ObservableObject {
     @Published private(set) var activeControl: ControlIdentifier?
     @Published private(set) var activeModeID: String?
     @Published private(set) var feedback: AppFeedback?
+    @Published private(set) var controlFeedback: ControlFeedback?
 
     var onStatusChanged: (() -> Void)?
     var onDisplayConfigurationWillChange: (() -> Void)?
@@ -23,6 +24,7 @@ final class AppViewModel: ObservableObject {
 
     private let systemController = SystemController()
     private var feedbackDismissal: DispatchWorkItem?
+    private var controlFeedbackDismissal: Task<Void, Never>?
     private var controlsRefreshTask: Task<Void, Never>?
     private var controlTask: Task<Void, Never>?
 
@@ -126,13 +128,13 @@ final class AppViewModel: ObservableObject {
     }
 
     func startScreenSaver() {
-        performAction(.screenSaver, success: "已启动屏幕保护程序") {
+        performAction(.screenSaver, success: "已请求启动屏幕保护程序") {
             try $0.startScreenSaver()
         }
     }
 
     func sleepDisplays() {
-        performAction(.displaySleep, success: "显示器已进入休眠") {
+        performAction(.displaySleep, success: "已发送显示器休眠请求") {
             try $0.sleepDisplays()
         }
     }
@@ -160,8 +162,19 @@ final class AppViewModel: ObservableObject {
         }
     }
 
+    func dismissFeedback() {
+        feedbackDismissal?.cancel()
+        feedback = nil
+    }
+
+    func dismissControlFeedback() {
+        controlFeedbackDismissal?.cancel()
+        controlFeedback = nil
+    }
+
     func shutdown() {
         feedbackDismissal?.cancel()
+        controlFeedbackDismissal?.cancel()
         controlsRefreshTask?.cancel()
         controlTask?.cancel()
         systemController.shutdown()
@@ -184,7 +197,7 @@ final class AppViewModel: ObservableObject {
                 controller.snapshot
             }.value
             guard !Task.isCancelled else { return }
-            guard let self, self.controls != snapshot else { return }
+            guard let self, self.activeControl == nil, self.controls != snapshot else { return }
             self.controls = snapshot
         }
     }
@@ -216,10 +229,12 @@ final class AppViewModel: ObservableObject {
         operation: @escaping @Sendable (SystemController) throws -> Void
     ) {
         guard activeControl == nil else { return }
+        controlsRefreshTask?.cancel()
+        dismissControlFeedback()
+        dismissFeedback()
         let previousControls = controls
         activeControl = identifier
         controls = controls.updating(identifier, to: optimisticValue)
-        feedback = nil
 
         let controller = systemController
         controlTask = Task { [weak self] in
@@ -247,14 +262,10 @@ final class AppViewModel: ObservableObject {
             switch result {
             case .success(let snapshot):
                 self.controls = snapshot
-                self.showFeedback(message, tone: .success)
+                self.showControlFeedback(identifier, message: message, tone: .success)
             case .failure(let error):
                 self.controls = previousControls
-                self.showFeedback(
-                    error.localizedDescription,
-                    tone: .warning,
-                    action: self.feedbackAction(for: error)
-                )
+                self.showControlFailure(identifier, error: error)
                 self.refreshControls()
             }
         }
@@ -266,8 +277,9 @@ final class AppViewModel: ObservableObject {
         operation: @escaping @Sendable (SystemController) throws -> Void
     ) {
         guard activeControl == nil else { return }
+        dismissControlFeedback()
+        dismissFeedback()
         activeControl = identifier
-        feedback = nil
 
         let controller = systemController
         controlTask = Task { [weak self] in
@@ -279,16 +291,42 @@ final class AppViewModel: ObservableObject {
             self.activeControl = nil
             switch result {
             case .success:
-                self.showFeedback(message, tone: .success)
+                self.showControlFeedback(identifier, message: message, tone: .success)
             case .failure(let error):
-                self.showFeedback(error.localizedDescription, tone: .warning)
+                self.showControlFailure(identifier, error: error)
             }
+        }
+    }
+
+    private func showControlFailure(_ identifier: ControlIdentifier, error: Error) {
+        let action = feedbackAction(for: error)
+        let message = action == .openAutomationSettings
+            ? "无法切换外观。请在「隐私与安全性 → 自动化」中允许 HiDPI Quick 控制「系统事件」。"
+            : error.localizedDescription
+        showControlFeedback(identifier, message: message, tone: .warning, action: action)
+    }
+
+    private func showControlFeedback(
+        _ identifier: ControlIdentifier,
+        message: String,
+        tone: FeedbackTone,
+        action: FeedbackAction? = nil
+    ) {
+        dismissControlFeedback()
+        let item = AppFeedback(message: message, tone: tone, action: action)
+        controlFeedback = ControlFeedback(control: identifier, feedback: item)
+        announce(message)
+        guard tone == .success else { return }
+        controlFeedbackDismissal = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            guard !Task.isCancelled, self?.controlFeedback?.feedback.id == item.id else { return }
+            self?.controlFeedback = nil
         }
     }
 
     private func feedbackAction(for error: Error) -> FeedbackAction? {
         guard let error = error as? SystemControlError else { return nil }
-        if case .automationFailed = error {
+        if case .automationDenied = error {
             return .openAutomationSettings
         }
         return nil

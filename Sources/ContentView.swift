@@ -125,6 +125,14 @@ struct ContentView: View {
                 }
             }
         }
+        .overlay(alignment: .bottom) {
+            if viewModel.selectedSection == .controls,
+               let result = viewModel.controlFeedback, result.feedback.tone == .warning {
+                feedbackBanner(result.feedback, dismiss: viewModel.dismissControlFeedback)
+            } else if let feedback = viewModel.feedback {
+                feedbackBanner(feedback, dismiss: viewModel.dismissFeedback)
+            }
+        }
         .onPreferenceChange(PanelHeights.self) { heights in
             if heights.count == 3 {
                 let scale = max(displayScale, 1)
@@ -330,13 +338,14 @@ struct ContentView: View {
         }
     }
 
+    private func feedbackBanner(_ feedback: AppFeedback, dismiss: @escaping () -> Void) -> some View {
+        FeedbackView(feedback: feedback, onAction: viewModel.performFeedbackAction, onDismiss: dismiss)
+            .padding(.horizontal, PanelGrid.edge)
+            .padding(.bottom, 42)
+    }
+
     private var footer: some View {
         VStack(spacing: 0) {
-            if let feedback = viewModel.feedback {
-                FeedbackView(feedback: feedback, onAction: viewModel.performFeedbackAction)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 6)
-            }
             PanelDivider().padding(.horizontal, 14)
             if viewModel.selectedSection == .displays {
                 HStack(spacing: 8) {
@@ -610,6 +619,7 @@ private struct ControlsPane: View {
                     subtitle: viewModel.controls.keepAwake ? "退出 App 时自动关闭" : "阻止系统休眠和自动屏保",
                     isOn: binding(viewModel.controls.keepAwake, action: viewModel.setKeepAwake),
                     isBusy: viewModel.activeControl == .keepAwake,
+                    hasSucceeded: succeeded(.keepAwake),
                     isInteractionDisabled: viewModel.activeControl != nil
                 )
                 rowDivider
@@ -619,6 +629,7 @@ private struct ControlsPane: View {
                     subtitle: viewModel.controls.darkMode ? "当前使用深色外观" : "当前使用浅色外观",
                     isOn: binding(viewModel.controls.darkMode, action: viewModel.setDarkMode),
                     isBusy: viewModel.activeControl == .darkMode,
+                    hasSucceeded: succeeded(.darkMode),
                     isInteractionDisabled: viewModel.activeControl != nil
                 )
                 rowDivider
@@ -628,6 +639,7 @@ private struct ControlsPane: View {
                     subtitle: viewModel.controls.desktopIconsHidden ? "桌面图标已隐藏" : "桌面图标正常显示",
                     isOn: binding(viewModel.controls.desktopIconsHidden, action: viewModel.setDesktopIconsHidden),
                     isBusy: viewModel.activeControl == .desktopIcons,
+                    hasSucceeded: succeeded(.desktopIcons),
                     isInteractionDisabled: viewModel.activeControl != nil
                 )
                 rowDivider
@@ -637,6 +649,7 @@ private struct ControlsPane: View {
                     subtitle: viewModel.controls.hiddenFilesVisible ? "Finder 正在显示隐藏项目" : "Finder 当前不显示隐藏文件",
                     isOn: binding(viewModel.controls.hiddenFilesVisible, action: viewModel.setHiddenFilesVisible),
                     isBusy: viewModel.activeControl == .hiddenFiles,
+                    hasSucceeded: succeeded(.hiddenFiles),
                     isInteractionDisabled: viewModel.activeControl != nil
                 )
                 rowDivider
@@ -646,6 +659,7 @@ private struct ControlsPane: View {
                     subtitle: viewModel.controls.dockAutoHide ? "移到屏幕边缘时显示 Dock" : "Dock 保持显示",
                     isOn: binding(viewModel.controls.dockAutoHide, action: viewModel.setDockAutoHide),
                     isBusy: viewModel.activeControl == .dockAutoHide,
+                    hasSucceeded: succeeded(.dockAutoHide),
                     isInteractionDisabled: viewModel.activeControl != nil
                 )
             }
@@ -658,6 +672,7 @@ private struct ControlsPane: View {
                     icon: .saver,
                     title: "启动屏幕保护程序",
                     isBusy: viewModel.activeControl == .screenSaver,
+                    hasSucceeded: succeeded(.screenSaver),
                     isInteractionDisabled: viewModel.activeControl != nil,
                     action: viewModel.startScreenSaver
                 )
@@ -666,12 +681,17 @@ private struct ControlsPane: View {
                     icon: .displayOff,
                     title: "立即关闭显示器",
                     isBusy: viewModel.activeControl == .displaySleep,
+                    hasSucceeded: succeeded(.displaySleep),
                     isInteractionDisabled: viewModel.activeControl != nil,
                     action: viewModel.sleepDisplays
                 )
             }
             .controlGroupStyle()
         }
+    }
+
+    private func succeeded(_ control: ControlIdentifier) -> Bool {
+        viewModel.controlFeedback?.control == control && viewModel.controlFeedback?.feedback.tone == .success
     }
 
     private func toolSectionLabel(_ title: String) -> some View {
@@ -702,12 +722,33 @@ private struct ControlsPane: View {
     }
 }
 
+private struct ControlRowStatus: View {
+    let isBusy: Bool
+    let hasSucceeded: Bool
+
+    var body: some View {
+        ZStack {
+            Color.clear
+            if isBusy {
+                ProgressView().controlSize(.small)
+            } else if hasSucceeded {
+                Image(systemName: "checkmark.circle.fill")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(Color.accentColor)
+            }
+        }
+        .frame(width: 14, height: 14)
+        .accessibilityHidden(true) // Completion is announced once by the view model.
+    }
+}
+
 private struct ToggleControlRow: View {
     let icon: SettingsGlyph.Kind
     let title: String
     let subtitle: String
     @Binding var isOn: Bool
     let isBusy: Bool
+    let hasSucceeded: Bool
     let isInteractionDisabled: Bool
 
     var body: some View {
@@ -717,7 +758,7 @@ private struct ToggleControlRow: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
                     .font(PanelType.action)
-                Text(subtitle)
+                Text(isBusy ? "正在应用…" : (hasSucceeded ? (isOn ? "已开启" : "已关闭") : subtitle))
                     .font(PanelType.detail)
                     .foregroundStyle(PanelType.detailInk)
                     .lineLimit(1)
@@ -725,11 +766,7 @@ private struct ToggleControlRow: View {
 
             Spacer(minLength: 8)
 
-            ProgressView()
-                .controlSize(.small)
-                .frame(width: 14, height: 14)
-                .opacity(isBusy ? 1 : 0)
-                .accessibilityHidden(!isBusy)
+            ControlRowStatus(isBusy: isBusy, hasSucceeded: hasSucceeded)
 
             Toggle("", isOn: $isOn)
                 .labelsHidden()
@@ -748,6 +785,7 @@ private struct ActionRow: View {
     let icon: SettingsGlyph.Kind
     let title: String
     let isBusy: Bool
+    let hasSucceeded: Bool
     let isInteractionDisabled: Bool
     let action: () -> Void
 
@@ -765,11 +803,7 @@ private struct ActionRow: View {
                     .font(PanelType.action)
                 Spacer()
 
-                ProgressView()
-                    .controlSize(.small)
-                    .frame(width: 14, height: 14)
-                    .opacity(isBusy ? 1 : 0)
-                    .accessibilityHidden(!isBusy)
+                ControlRowStatus(isBusy: isBusy, hasSucceeded: hasSucceeded)
             }
             .padding(.horizontal, 12)
             .frame(minHeight: 34)
@@ -825,43 +859,54 @@ private extension View {
 private struct FeedbackView: View {
     let feedback: AppFeedback
     let onAction: (FeedbackAction) -> Void
+    let onDismiss: () -> Void
 
     var body: some View {
         let isSuccess = feedback.tone == .success
+        HStack(alignment: .top, spacing: 9) {
+            Image(systemName: isSuccess ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                .font(.system(size: 13))
+                .foregroundStyle(isSuccess ? Color.accentColor : Color.orange)
+                .padding(.top, 1)
+                .accessibilityHidden(true)
 
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(alignment: .top, spacing: 8) {
-                Image(systemName: isSuccess ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
-                    .padding(.top, 1)
+            VStack(alignment: .leading, spacing: 5) {
+                if !isSuccess {
+                    Text("操作未完成").font(PanelType.selected)
+                }
                 Text(feedback.message)
                     .font(PanelType.detail)
+                    .foregroundStyle(PanelType.detailInk)
+                    .lineLimit(3)
                     .fixedSize(horizontal: false, vertical: true)
-                Spacer(minLength: 0)
-            }
-
-            if let action = feedback.action {
-                Button(action.title) {
-                    onAction(action)
+                    .help(feedback.message)
+                if let action = feedback.action {
+                    Button(action.title) { onAction(action) }
+                        .buttonStyle(.link)
+                        .font(PanelType.action)
                 }
-                .buttonStyle(.link)
-                .font(PanelType.action)
-                .accessibilityHint("打开对应的系统设置页面")
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            Button(action: onDismiss) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(PanelType.detailInk)
+                    .frame(width: 24, height: 24)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.borderless)
+            .accessibilityLabel("关闭提示")
+            .help("关闭提示")
         }
-        .foregroundStyle(isSuccess ? Color.green : Color.orange)
-        .padding(.horizontal, 10)
-        .padding(.vertical, 8)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background {
-            RoundedRectangle(cornerRadius: 8)
-                .fill(Color(nsColor: .windowBackgroundColor))
-            RoundedRectangle(cornerRadius: 8)
-                .fill((isSuccess ? Color.green : Color.orange).opacity(0.10))
-        }
+        .padding(10)
+        .background(Color(nsColor: .windowBackgroundColor), in: RoundedRectangle(cornerRadius: 9))
         .overlay {
-            RoundedRectangle(cornerRadius: 8)
-                .strokeBorder((isSuccess ? Color.green : Color.orange).opacity(0.16))
+            RoundedRectangle(cornerRadius: 9)
+                .strokeBorder(Color(nsColor: .separatorColor), lineWidth: 0.5)
+                .allowsHitTesting(false)
         }
+        .shadow(color: .black.opacity(0.15), radius: 6, y: 2)
     }
 }
 

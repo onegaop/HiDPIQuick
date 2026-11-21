@@ -3,6 +3,7 @@ import Foundation
 
 enum SystemControlError: LocalizedError {
     case commandFailed(String)
+    case automationDenied
     case automationFailed(String)
     case actionUnavailable(String)
     case stateNotApplied(String)
@@ -11,6 +12,8 @@ enum SystemControlError: LocalizedError {
         switch self {
         case .commandFailed(let message):
             return message.isEmpty ? "系统命令执行失败" : message
+        case .automationDenied:
+            return "未获得控制系统事件的权限"
         case .automationFailed(let message):
             return message.isEmpty ? "自动化操作失败，请检查系统权限" : message
         case .actionUnavailable(let message), .stateNotApplied(let message):
@@ -80,6 +83,10 @@ final class SystemController: @unchecked Sendable {
         var errorInfo: NSDictionary?
         _ = script.executeAndReturnError(&errorInfo)
         if let errorInfo {
+            // -1743 is Apple Events' permission denial, not a generic script failure.
+            if (errorInfo[NSAppleScript.errorNumber] as? NSNumber)?.intValue == -1743 {
+                throw SystemControlError.automationDenied
+            }
             let message = errorInfo[NSAppleScript.errorMessage] as? String ?? "请允许 HiDPI Quick 控制系统事件"
             throw SystemControlError.automationFailed(message)
         }

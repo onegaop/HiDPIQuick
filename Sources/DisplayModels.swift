@@ -158,3 +158,9 @@ struct AppFeedback: Identifiable {
     let tone: FeedbackTone
     let action: FeedbackAction?
 }
+
+
+struct ControlFeedback {
+    let control: ControlIdentifier
+    let feedback: AppFeedback
+}
