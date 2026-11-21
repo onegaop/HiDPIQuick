@@ -24,9 +24,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         popover.animates = false
         popover.delegate = self
         popover.contentSize = ContentView.panelSize
-        popover.contentViewController = NSHostingController(
-            rootView: ContentView(viewModel: viewModel)
-        )
+        if #available(macOS 26.0, *) {
+            popover.contentViewController = GlassPopoverController(viewModel: viewModel)
+        } else {
+            popover.contentViewController = NSHostingController(
+                rootView: ContentView(viewModel: viewModel)
+            )
+        }
 
         viewModel.onStatusChanged = { [weak self] in
             self?.updateStatusTitle()

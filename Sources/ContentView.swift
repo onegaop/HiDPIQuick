@@ -4,6 +4,7 @@ import SwiftUI
 struct ContentView: View {
     static let panelSize = NSSize(width: 336, height: 450)
     @ObservedObject var viewModel: AppViewModel
+    var usesNativeGlass = false
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @State private var selectedDisplayID: DisplaySnapshot.ID?
 
@@ -42,10 +43,12 @@ struct ContentView: View {
         }
         .frame(width: Self.panelSize.width, height: Self.panelSize.height)
         .background {
-            if reduceTransparency {
-                Color(nsColor: .windowBackgroundColor)
-            } else {
-                Rectangle().fill(.regularMaterial)
+            if !usesNativeGlass {
+                if reduceTransparency {
+                    Color(nsColor: .windowBackgroundColor)
+                } else {
+                    Rectangle().fill(.regularMaterial)
+                }
             }
         }
     }
