@@ -1,8 +1,7 @@
 import Cocoa
 import SwiftUI
 
-/// Composes one native glass surface without changing NSPopover positioning,
-/// keyboard handling, or the AppKit dismissal lifecycle.
+/// Hosts the native glass surface separately from panel placement and dismissal.
 @available(macOS 26.0, *)
 @MainActor
 final class GlassPopoverController: NSViewController {
@@ -72,7 +71,7 @@ final class GlassPopoverController: NSViewController {
             let glass = NSGlassEffectView(frame: view.bounds)
             glass.autoresizingMask = [.width, .height]
             glass.style = .regular
-            glass.cornerRadius = 12
+            glass.cornerRadius = 17
             let content = NSView(frame: glass.bounds)
             content.autoresizingMask = [.width, .height]
             glass.contentView = content

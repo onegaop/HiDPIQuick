@@ -1,7 +1,7 @@
 import Cocoa
 import SwiftUI
 
-/// Keeps the popover anchored to AppKit's status item; only its content height changes.
+/// Height budget for the status item panel on its current display.
 @MainActor
 final class PanelViewport: ObservableObject {
     @Published var maximumHeight: CGFloat = 450
@@ -50,7 +50,7 @@ private enum PanelType {
 
 @MainActor
 struct ContentView: View {
-    static let panelSize = NSSize(width: 336, height: 312)
+    static let panelSize = NSSize(width: 312, height: 312)
     @ObservedObject var viewModel: AppViewModel
     var usesNativeGlass = false
     @ObservedObject var viewport: PanelViewport
@@ -291,20 +291,18 @@ struct ContentView: View {
             }
 
             if let mode = display.currentMode {
-                HStack(alignment: .firstTextBaseline, spacing: PanelGrid.columnGap) {
-                    Text(mode.logicalResolution)
-                        .font(PanelType.resolution).monospacedDigit()
-                        .lineLimit(1).minimumScaleFactor(0.85)
-                    Spacer(minLength: 0)
-                    Text(mode.isHiDPI ? "当前 · 2× HiDPI" : "当前 · 非 HiDPI")
-                        .font(PanelType.detail)
-                        .foregroundStyle(PanelType.detailInk)
-                        .fixedSize()
-                    Text(mode.presentationRefresh)
-                        .font(PanelType.detail).monospacedDigit()
-                        .foregroundStyle(PanelType.detailInk)
-                        .fixedSize()
-                    Color.clear.frame(width: PanelGrid.markWidth, height: 0)
+                ViewThatFits(in: .horizontal) {
+                    HStack(alignment: .firstTextBaseline, spacing: PanelGrid.columnGap) {
+                        resolutionValue(mode).fixedSize()
+                        Spacer(minLength: 4)
+                        resolutionDetails(mode).fixedSize()
+                    }
+                    .padding(.trailing, PanelGrid.markWidth + PanelGrid.columnGap)
+
+                    VStack(alignment: .leading, spacing: 4) {
+                        resolutionValue(mode)
+                        resolutionDetails(mode)
+                    }
                 }
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel("当前分辨率 \(mode.logicalResolution)，\(mode.isHiDPI ? "2× HiDPI" : "非 HiDPI")，\(mode.presentationRefresh)，渲染尺寸 \(mode.backingResolution)")
@@ -315,6 +313,23 @@ struct ContentView: View {
         }
         .padding(.horizontal, PanelGrid.rowInset)
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func resolutionValue(_ mode: DisplayMode) -> some View {
+        Text(mode.logicalResolution)
+            .font(PanelType.resolution)
+            .monospacedDigit()
+            .lineLimit(1)
+            .minimumScaleFactor(0.85)
+    }
+
+    private func resolutionDetails(_ mode: DisplayMode) -> some View {
+        HStack(spacing: PanelGrid.columnGap) {
+            Text(mode.isHiDPI ? "2× HiDPI" : "非 HiDPI")
+            Text(mode.presentationRefresh).monospacedDigit()
+        }
+        .font(PanelType.detail)
+        .foregroundStyle(PanelType.detailInk)
     }
 
     @ViewBuilder private var pageBody: some View {

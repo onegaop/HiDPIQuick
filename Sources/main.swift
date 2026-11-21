@@ -2,10 +2,9 @@ import Cocoa
 import SwiftUI
 
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate {
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-    private let popover = NSPopover()
-    private let outsideClickMonitor = PopoverOutsideClickMonitor()
+    private let panel = MenuPanelController()
     private let viewModel = AppViewModel()
     private let viewport = PanelViewport()
 
@@ -20,24 +19,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             button.target = self
         }
 
-        popover.behavior = .transient
-        popover.animates = false
-        popover.delegate = self
-        popover.contentSize = ContentView.panelSize
-        let resize: (NSSize) -> Void = { [weak self] size in
-            guard let self, self.popover.contentSize != size else { return }
-            self.popover.contentSize = size
-        }
+        let resize: (NSSize) -> Void = { [weak self] size in self?.panel.resize(to: size) }
         if #available(macOS 26.0, *) {
-            popover.contentViewController = GlassPopoverController(
-                viewModel: viewModel, viewport: viewport, onSizeChange: resize
+            panel.setContentViewController(
+                GlassPopoverController(viewModel: viewModel, viewport: viewport, onSizeChange: resize)
             )
         } else {
             let host = NSHostingController(
                 rootView: ContentView(viewModel: viewModel, viewport: viewport, onSizeChange: resize)
             )
             host.sizingOptions = []
-            popover.contentViewController = host
+            panel.setContentViewController(host)
         }
 
         viewModel.onStatusChanged = { [weak self] in
@@ -74,30 +66,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
-        outsideClickMonitor.stop()
+        panel.close()
         viewModel.shutdown()
         NotificationCenter.default.removeObserver(self)
     }
 
-    func popoverWillShow(_ notification: Notification) {
-        viewModel.refresh()
-    }
-
-    func popoverDidShow(_ notification: Notification) {
-        outsideClickMonitor.start { [weak self] in
-            guard let self, self.popover.isShown else { return }
-            self.popover.performClose(nil)
-        }
-    }
-
-    func popoverDidClose(_ notification: Notification) {
-        outsideClickMonitor.stop()
-    }
-
-
     @objc private func togglePopover(_ sender: AnyObject?) {
-        if popover.isShown {
-            popover.performClose(sender)
+        if panel.isShown {
+            panel.close()
         } else {
             viewModel.selectedSection = .displays
             showPopover()
@@ -105,27 +81,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     }
 
     @objc private func screenParametersDidChange(_ notification: Notification) {
-        if popover.isShown {
-            popover.performClose(nil)
+        if panel.isShown {
+            panel.close()
         }
         viewModel.refreshDisplayState()
     }
 
     private func showPopover() {
-        guard let button = statusItem.button else { return }
-        if let window = button.window, let screen = window.screen {
-            let anchor = window.convertToScreen(button.convert(button.bounds, to: nil))
-            let availableBelow = anchor.minY - screen.visibleFrame.minY - 20
-            viewport.maximumHeight = min(450, max(1, floor(availableBelow)))
-            if popover.contentSize.height > viewport.maximumHeight {
-                popover.contentSize.height = viewport.maximumHeight
-            }
-        } else {
-            viewport.maximumHeight = 450
-        }
+        guard let button = statusItem.button, let window = button.window, let screen = window.screen else { return }
+        let anchor = window.convertToScreen(button.convert(button.bounds, to: nil))
+        viewport.maximumHeight = min(450, panel.maximumHeight(anchor: anchor, visibleFrame: screen.visibleFrame))
         viewModel.refresh()
-        popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
-        NSApp.activate(ignoringOtherApps: true)
+        panel.show(anchor: anchor, visibleFrame: screen.visibleFrame, maximumHeight: viewport.maximumHeight)
     }
 
     private func updateStatusItem() {
@@ -140,8 +107,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     }
 
     private func closePopoverForDisplayChange() {
-        guard popover.isShown else { return }
-        popover.performClose(nil)
+        guard panel.isShown else { return }
+        panel.close()
     }
 }
 

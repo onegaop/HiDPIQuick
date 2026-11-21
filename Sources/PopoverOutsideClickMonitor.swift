@@ -10,7 +10,11 @@ final class PopoverOutsideClickMonitor {
     private var generation: UUID?
     private var remove: (() -> Void)?
 
-    init(install: @escaping Install = PopoverOutsideClickMonitor.installAppKitMonitor) {
+    convenience init() {
+        self.init(install: { handler in Self.installAppKitMonitor(handler: handler) })
+    }
+
+    init(install: @escaping Install) {
         self.install = install
     }
 
